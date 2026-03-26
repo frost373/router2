@@ -236,3 +236,165 @@ mods:glm-5,kimi-k2.5,mimo-v2-pro,deepseek-v3.2
 | `alias_expand_prompt.txt` | 别名模板扩写 |
 | `adversarial_prompt.txt` | 最小编辑对抗样本 |
 | `paraphrase_prompt.txt` | 自由改写 |
+
+## 3. Commands 压缩器
+
+**脚本路径：** `scripts/command_registry_compact.py`
+
+### 功能说明
+
+将 `commands/*.json` 中的指令注册表压缩为简洁的文本格式，用于将完整指令列表注入到 LLM 提示词中，减少 token 消耗。
+
+### 压缩格式
+
+每行一条指令，字段以 `|` 分隔：
+
+```
+{command_id}|{精简描述}|{alias1}/{alias2}/{alias3}/...
+```
+
+- **command_id** — 原始指令 ID
+- **精简描述** — 去除"命令AI队友"等前缀后的核心描述
+- **aliases** — 所有别名以 `/` 分隔
+
+### 使用方式
+
+```bash
+# 压缩指定文件（输出到终端）
+python scripts/command_registry_compact.py commands/mmorpg.json
+
+# 输出到文件
+python scripts/command_registry_compact.py commands/mmorpg.json -o output/mmorpg_compact.txt
+
+# 不传参数时，自动压缩 commands/ 目录下所有 .json 文件
+python scripts/command_registry_compact.py
+```
+
+### 作为模块导入
+
+```python
+from command_registry_compact import compact_file, compact_registry, load_commands
+
+# 方式1：直接从文件压缩
+text = compact_file("commands/mmorpg.json")
+
+# 方式2：先加载再压缩
+commands = load_commands("commands/mmorpg.json")
+text = compact_registry(commands)
+```
+
+### 输出示例
+
+```
+ATTACK_TARGET|立即攻击指定目标|打{target}/攻击{target}/先杀{target}/集火{target}/给我揍{target}
+FOLLOW_ME|立即跟随玩家行动|跟我走/跟着我/跟上/别掉队/贴我走
+HOLD_POSITION|停留在当前位置并保持驻守|原地别动/守在这里/站这别跑/就地守着/留在这
+CAST_ON_TARGET|使用指定技能或物品作用于指定目标|对{target}用{use}/给{target}放{use}/拿{use}打{target}/把{use}给{target}/用{use}处理{target}
+```
+
+## 4. 全局负样本生成器
+
+**脚本路径：** `scripts/generate_global_negatives.py`
+
+### 功能说明
+
+基于完整 command registry（压缩格式），使用 LLM 批量生成全局级 tactical/chat 负样本。生成后使用 `qwen3-embedding-8b` 进行语义去重。
+
+负样本覆盖 10 个 bucket：
+
+| 分类 | Bucket | 说明 |
+|------|--------|------|
+| tactical | tactical_self_action | 玩家描述自己的动作 |
+| tactical | tactical_team_plan | 团队战术沟通/分工 |
+| tactical | tactical_conditional | 包含条件/时机/判断 |
+| tactical | tactical_multi_step | 两步及以上组合动作 |
+| tactical | tactical_missing_slot | 缺少必要参数信息 |
+| tactical | tactical_out_of_registry_teammate_action | 命令AI做不在registry中的动作 |
+| tactical | tactical_ambiguous | 模糊/黑话/间接表达 |
+| chat | chat_emotion | 纯情绪/吐槽/夸奖 |
+| chat | chat_noise | 无意义噪声/符号 |
+| chat | chat_out_of_game | 游戏外请求 |
+
+### 使用方式
+
+```bash
+# 默认生成（3轮，去重阈值0.92）
+python scripts/generate_global_negatives.py --game mmorpg
+
+# 指定轮数和阈值
+python scripts/generate_global_negatives.py --game mmorpg --rounds 5 --dedup_threshold 0.90
+
+# 指定模型
+python scripts/generate_global_negatives.py --game mmorpg --model kimi-k2.5
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--game` | `mmorpg` | 游戏类型 |
+| `--model` | `deepseek-v3.2` | LLM 模型名称 |
+| `--rounds` | `3` | 生成轮数（每轮 ~56 条） |
+| `--dedup_threshold` | `0.92` | 语义去重余弦相似度阈值 |
+
+### 输出
+
+```
+output/{game}/global_negatives.jsonl
+```
+
+每行格式：
+```json
+{
+  "input": "我去左边拉怪",
+  "label": {"type": "tactical"},
+  "meta": {"bucket": "tactical_self_action"},
+  "source_type": "global_negative"
+}
+```
+
+### 流程说明
+
+1. 使用 Commands 压缩器将 `commands/{game}.json` 压缩为 compact 格式
+2. 将 compact commands 注入到提示词模板 `global_negative_prompt.txt`
+3. 分轮调用 LLM 生成负样本
+4. 调用 `qwen3-embedding-8b` 获取所有样本的 embedding 向量
+5. 基于余弦相似度进行语义去重
+6. 输出去重后的 JSONL 文件
+
+## 5. Embedding 客户端
+
+**脚本路径：** `scripts/embedding_client.py`
+
+### 功能说明
+
+封装 Embedding API 调用（从 `LLM.txt` 读取配置），提供批量向量获取和基于余弦相似度的语义去重功能。
+
+### LLM.txt 配置
+
+需要在 `LLM.txt` 中追加：
+
+```
+EMBEDDING_URL:https://kspmas.ksyun.com/v1/embeddings
+embedding_mod:qwen3-embedding-8b
+```
+
+### 作为模块导入
+
+```python
+from embedding_client import get_embeddings, deduplicate_by_embedding
+
+# 获取 embedding 向量
+vectors = get_embeddings(["你好", "世界"])
+
+# 语义去重
+samples = [{"input": "我去左边"}, {"input": "我过去左边"}]
+deduped, stats = deduplicate_by_embedding(samples, text_key="input", threshold=0.92)
+print(f"去重: {stats['before']} → {stats['after']}")
+```
+
+### 独立测试
+
+```bash
+python scripts/embedding_client.py
+```

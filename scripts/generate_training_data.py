@@ -45,6 +45,18 @@ def parse_args():
         "--paraphrase_source", type=int, default=5,
         help="每个 command 选多少条正样本做 paraphrase（默认 5）"
     )
+    parser.add_argument(
+        "--skip_global_negatives", action="store_true",
+        help="跳过全局负样本生成（使用已有结果）"
+    )
+    parser.add_argument(
+        "--global_neg_rounds", type=int, default=3,
+        help="全局负样本生成轮数（默认 3）"
+    )
+    parser.add_argument(
+        "--dedup_threshold", type=float, default=0.92,
+        help="全局负样本去重余弦相似度阈值（默认 0.92）"
+    )
     return parser.parse_args()
 
 
@@ -60,6 +72,19 @@ def merge_outputs(game: str, command_id: str | None = None):
         ("adversarial.jsonl", "adversarial"),
         ("paraphrase.jsonl", "paraphrase"),
     ]
+
+    # 全局负样本（不在 command 子目录中，单独处理）
+    global_neg_path = os.path.join(game_dir, "global_negatives.jsonl")
+    global_neg_samples = []
+    if os.path.isfile(global_neg_path):
+        with open(global_neg_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    sample = json.loads(line)
+                    sample.setdefault("source_type", "global_negative")
+                    global_neg_samples.append(sample)
+        print(f"  全局负样本: {len(global_neg_samples)} 条")
 
     # 确定要合并哪些 command 目录
     if command_id:
@@ -95,6 +120,9 @@ def merge_outputs(game: str, command_id: str | None = None):
                     f.write(json.dumps(s, ensure_ascii=False) + "\n")
             print(f"  {cid}: {len(cmd_samples)} 条 → {merged_path}")
             all_samples.extend(cmd_samples)
+
+    # 加入全局负样本
+    all_samples.extend(global_neg_samples)
 
     # 全量合并到 game 目录
     merged_all_path = os.path.join(game_dir, "merged_all.jsonl")
@@ -179,6 +207,18 @@ def main():
         max_source_per_command=args.paraphrase_source,
         model=args.model,
     )
+
+    # Step 5.5: 全局负样本
+    if not args.skip_global_negatives:
+        from generate_global_negatives import generate_global_negatives
+        generate_global_negatives(
+            game=args.game,
+            model=args.model,
+            rounds=args.global_neg_rounds,
+            dedup_threshold=args.dedup_threshold,
+        )
+    else:
+        print("\n  ⏭️  跳过全局负样本生成（使用已有结果）")
 
     # Step 6: 合并
     merge_outputs(args.game, command_id=args.command_id)

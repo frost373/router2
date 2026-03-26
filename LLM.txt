@@ -1,3 +1,5 @@
 URL:https://kspmas.ksyun.com/v1/chat/completions
+EMBEDDING_URL:https://kspmas.ksyun.com/v1/embeddings
 KEY:28d1c0e9-965e-458e-b21a-d7a5b3a2101d
 mods:glm-5,kimi-k2.5,mimo-v2-pro,deepseek-v3.2
+embedding_mod:qwen3-embedding-8b
