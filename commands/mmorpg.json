@@ -1,0 +1,345 @@
+{
+    "commands": [
+        {
+            "command_id": "ATTACK_TARGET",
+            "desc": "命令AI队友立即攻击指定目标",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "打{target}",
+                "攻击{target}",
+                "先杀{target}",
+                "集火{target}",
+                "给我揍{target}"
+            ]
+        },
+        {
+            "command_id": "FOLLOW_ME",
+            "desc": "命令AI队友立即跟随玩家行动",
+            "slots": [],
+            "aliases": [
+                "跟我走",
+                "跟着我",
+                "跟上",
+                "别掉队",
+                "贴我走"
+            ]
+        },
+        {
+            "command_id": "HOLD_POSITION",
+            "desc": "命令AI队友停留在当前位置并保持驻守",
+            "slots": [],
+            "aliases": [
+                "原地别动",
+                "守在这里",
+                "站这别跑",
+                "就地守着",
+                "留在这"
+            ]
+        },
+        {
+            "command_id": "MOVE_TO_TARGET",
+            "desc": "命令AI队友立即前往指定目标位置或地点描述",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "去{target}",
+                "过去{target}",
+                "到{target}去",
+                "马上去{target}",
+                "先去{target}"
+            ]
+        },
+        {
+            "command_id": "FALL_BACK",
+            "desc": "命令AI队友立刻后撤并回到玩家附近",
+            "slots": [],
+            "aliases": [
+                "撤回来",
+                "退回来",
+                "回来",
+                "往后撤",
+                "别冲了回来"
+            ]
+        },
+        {
+            "command_id": "DEFEND_TARGET",
+            "desc": "命令AI队友驻守并防守指定目标",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "守{target}",
+                "防住{target}",
+                "看住{target}",
+                "给我守着{target}",
+                "去护住{target}"
+            ]
+        },
+        {
+            "command_id": "COVER_TARGET",
+            "desc": "命令AI队友掩护指定目标并提供即时保护",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "掩护{target}",
+                "罩着{target}",
+                "看着{target}",
+                "保一下{target}",
+                "护着{target}"
+            ]
+        },
+        {
+            "command_id": "HEAL_TARGET",
+            "desc": "命令AI队友立即治疗指定目标",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "奶{target}",
+                "给{target}加血",
+                "抬一下{target}",
+                "治疗{target}",
+                "赶紧奶{target}"
+            ]
+        },
+        {
+            "command_id": "REVIVE_TARGET",
+            "desc": "命令AI队友立即复活指定目标",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "拉{target}",
+                "复活{target}",
+                "救起{target}",
+                "把{target}拉起来",
+                "先起{target}"
+            ]
+        },
+        {
+            "command_id": "BUFF_TARGET",
+            "desc": "命令AI队友对指定目标施加增益效果",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "给{target}上增益",
+                "给{target}加状态",
+                "给{target}套buff",
+                "给{target}上个强化",
+                "先buff{target}"
+            ]
+        },
+        {
+            "command_id": "TAUNT_TARGET",
+            "desc": "命令AI队友立即嘲讽指定目标并拉住仇恨",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "嘲讽{target}",
+                "拉住{target}",
+                "把{target}拉过去",
+                "接{target}仇恨",
+                "把{target}嘲过来"
+            ]
+        },
+        {
+            "command_id": "INTERRUPT_TARGET",
+            "desc": "命令AI队友立即打断指定目标当前施法或引导",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "断{target}",
+                "打断{target}",
+                "控住{target}读条",
+                "别让{target}放出来",
+                "快断掉{target}"
+            ]
+        },
+        {
+            "command_id": "CONTROL_TARGET",
+            "desc": "命令AI队友立即对指定目标施加控制效果",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "控{target}",
+                "定住{target}",
+                "晕{target}",
+                "把{target}控住",
+                "先控一下{target}"
+            ]
+        },
+        {
+            "command_id": "DISPEL_TARGET",
+            "desc": "命令AI队友立即驱散或净化指定目标身上的效果",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "驱散{target}",
+                "净化{target}",
+                "解掉{target}",
+                "给{target}解状态",
+                "帮{target}驱散"
+            ]
+        },
+        {
+            "command_id": "CAST_ON_TARGET",
+            "desc": "命令AI队友使用指定技能或物品作用于指定目标",
+            "slots": [
+                {
+                    "name": "use",
+                    "required": true,
+                    "type": "use_span"
+                },
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "对{target}用{use}",
+                "给{target}放{use}",
+                "拿{use}打{target}",
+                "把{use}给{target}",
+                "用{use}处理{target}"
+            ]
+        },
+        {
+            "command_id": "USE_ABILITY",
+            "desc": "命令AI队友立即使用指定技能或物品",
+            "slots": [
+                {
+                    "name": "use",
+                    "required": true,
+                    "type": "use_span"
+                }
+            ],
+            "aliases": [
+                "开{use}",
+                "用{use}",
+                "放{use}",
+                "把{use}交了",
+                "现在开{use}"
+            ]
+        },
+        {
+            "command_id": "USE_ITEM_ON_SELF",
+            "desc": "命令AI队友立即对自己使用指定技能或物品",
+            "slots": [
+                {
+                    "name": "use",
+                    "required": true,
+                    "type": "use_span"
+                }
+            ],
+            "aliases": [
+                "自己用{use}",
+                "给自己开{use}",
+                "你先吃{use}",
+                "你先用{use}",
+                "先给自己上{use}"
+            ]
+        },
+        {
+            "command_id": "STOP_ATTACK",
+            "desc": "命令AI队友立刻停止攻击和主动输出行为",
+            "slots": [],
+            "aliases": [
+                "停火",
+                "别打了",
+                "停手",
+                "先别输出",
+                "住手"
+            ]
+        },
+        {
+            "command_id": "LOOT_TARGET",
+            "desc": "命令AI队友立即拾取或拿取指定目标",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "捡{target}",
+                "去拿{target}",
+                "把{target}捡了",
+                "拾取{target}",
+                "把{target}拿过来"
+            ]
+        },
+        {
+            "command_id": "INTERACT_TARGET",
+            "desc": "命令AI队友立即与指定目标进行交互操作",
+            "slots": [
+                {
+                    "name": "target",
+                    "required": true,
+                    "type": "target_span"
+                }
+            ],
+            "aliases": [
+                "开{target}",
+                "点{target}",
+                "操作{target}",
+                "去开一下{target}",
+                "把{target}弄开"
+            ]
+        }
+    ]
+}
