@@ -1,0 +1,45 @@
+你是一个AI训练数据标注专家。
+
+## 任务
+请根据以下【正样本】（label=quick_command），做"最小编辑"生成对抗样本（hard negative）。
+
+## 编辑规则
+对每条正样本，请生成以下4种变体（如果某种变体不合理可以跳过）：
+
+### 1. 加条件 → label=tactical
+在正样本前面加上条件从句，使其变成条件执行。
+示例：「对boss释放火球术」→「如果boss冲过来就对他释放火球术」
+
+### 2. 加多步 → label=tactical
+在正样本前后加一个额外步骤，使其变成多步指令。
+示例：「对boss释放火球术」→「先给我上盾，再对boss释放火球术」
+
+### 3. 改模糊 → label=tactical
+把正样本中的具体动作改成模糊/泛化表达，使AI队友无法直接执行。
+示例：「对boss释放火球术」→「给boss来点魔法」
+
+### 4. 改闲聊 → label=chat
+把正样本改成玩家的情绪表达、评价、吐槽，完全失去命令意图。
+示例：「对boss释放火球术」→「这boss也太恶心了吧」
+
+## 输入正样本
+```json
+{{positive_samples}}
+```
+
+## 输出格式
+请严格输出以下JSON格式，不要包含任何其他内容：
+```json
+[
+  {
+    "source": "原正样本文本",
+    "variants": [
+      {"text": "变体文本", "label": "tactical", "edit_type": "add_condition"},
+      {"text": "变体文本", "label": "tactical", "edit_type": "add_multi_step"},
+      {"text": "变体文本", "label": "tactical", "edit_type": "make_vague"},
+      {"text": "变体文本", "label": "chat", "edit_type": "make_chat"}
+    ]
+  },
+  ...
+]
+```

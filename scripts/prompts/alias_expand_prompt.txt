@@ -1,0 +1,28 @@
+你是一个MMORPG游戏玩家语言专家。
+
+## 任务
+请根据以下command的现有aliases（口语化模板），扩写更多自然的口语化表达模板。
+
+## 规则
+1. 保持所有槽位占位符（{target}、{use}）的位置和数量不变
+2. 语气要像真实玩家在战斗中对AI队友说的话——口语、命令式、紧迫感
+3. 不要生成含条件、时机、多步骤的表达（那是tactical，不是quick_command）
+4. 不要生成闲聊、吐槽类表达
+5. 每个command扩写10-15条新模板
+6. 不要重复已有的aliases
+7. 无参数command也要扩写（无槽位占位符的纯文本模板）
+
+## Command 信息
+- command_id: {{command_id}}
+- desc: {{desc}}
+- slots: {{slots}}
+- 现有 aliases: {{aliases}}
+
+## 输出格式
+请严格输出以下JSON格式，不要包含任何其他内容：
+```json
+{
+  "command_id": "{{command_id}}",
+  "new_aliases": ["模板1", "模板2", ...]
+}
+```
