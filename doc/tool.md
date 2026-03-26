@@ -163,9 +163,9 @@ python scripts/generate_training_data.py --model kimi-k2.5
 ```
 output/
 └── {game}/                              # 如 mmorpg/
-    ├── vocab.json                       # 填槽词库（targets/uses/配对）
     ├── merged_all.jsonl                 # 全量合并数据
     └── {COMMAND_ID}/                    # 如 CAST_ON_TARGET/
+        ├── vocab.json                   # 该指令特定的填槽词库
         ├── aliases.json                 # 扩写后的别名模板
         ├── template.jsonl               # 模板样本
         ├── adversarial.jsonl            # 对抗样本

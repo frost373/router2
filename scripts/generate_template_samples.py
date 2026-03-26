@@ -22,9 +22,11 @@ def load_commands(game: str) -> list[dict]:
         return json.load(f)["commands"]
 
 
-def load_vocab(game: str) -> dict:
-    """加载词库"""
-    path = os.path.join(PROJECT_DIR, "output", game, "vocab.json")
+def load_vocab(game: str, command_id: str) -> dict:
+    """加载特定 command 的词库"""
+    path = os.path.join(PROJECT_DIR, "output", game, command_id, "vocab.json")
+    if not os.path.isfile(path):
+        return {"targets": [], "uses": [], "target_use_pairs": []}
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -112,7 +114,6 @@ def generate_template_samples(
     print(f"{'='*60}")
 
     commands = load_commands(game)
-    vocab = load_vocab(game)
     aliases_data = load_expanded_aliases(game, command_id)
 
     if command_id:
@@ -123,6 +124,8 @@ def generate_template_samples(
     for cmd in commands:
         cid = cmd["command_id"]
         slot_names = get_slot_names(cmd)
+        
+        vocab = load_vocab(game, cid) if slot_names else {}
 
         # 获取该 command 的所有别名模板
         if cid in aliases_data:

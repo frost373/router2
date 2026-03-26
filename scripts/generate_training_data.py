@@ -25,7 +25,7 @@ def parse_args():
         "--command_id", default=None, help="只处理指定的 command_id（用于测试）"
     )
     parser.add_argument(
-        "--model", default=None, help="LLM 模型名称（默认 deepseek-v3.2）"
+        "--model", default=None, help="LLM 模型名称（默认 glm-5）"
     )
     parser.add_argument(
         "--skip_vocab", action="store_true", help="跳过词库生成（使用已有词库）"
@@ -138,12 +138,12 @@ def main():
     print("=" * 60)
     print(f"  游戏类型: {args.game}")
     print(f"  目标 command: {args.command_id or '全部'}")
-    print(f"  模型: {args.model or '默认 (deepseek-v3.2)'}")
+    print(f"  模型: {args.model or '默认 (glm-5)'}")
 
     # Step 1: 词库生成
     if not args.skip_vocab:
         from generate_vocab import generate_vocab
-        generate_vocab(args.game, model=args.model)
+        generate_vocab(args.game, command_id=args.command_id, model=args.model)
     else:
         print("\n  ⏭️  跳过词库生成（使用已有词库）")
 

@@ -38,7 +38,7 @@ def paraphrase_batch(
         改写后的样本列表
     """
     input_items = [
-        {"text": s["text"], "command_id": s["command_id"], "label": s["label"]}
+        {"text": s["text"], "command_id": s["command_id"], "label": s["label"], "slots": s.get("slots", {})}
         for s in samples
     ]
     input_json = json.dumps(input_items, ensure_ascii=False, indent=2)
@@ -60,7 +60,17 @@ def paraphrase_batch(
                 break
 
         for para_text in item.get("paraphrases", []):
-            if para_text:
+            if not para_text:
+                continue
+
+            # 校验: slots 的值必须被改写后的 text 包含
+            valid = True
+            for slot_val in orig_slots.values():
+                if slot_val not in para_text:
+                    valid = False
+                    break
+
+            if valid:
                 paraphrased.append({
                     "text": para_text,
                     "label": label,
@@ -68,6 +78,8 @@ def paraphrase_batch(
                     "slots": orig_slots,
                     "source_text": source,
                 })
+            else:
+                print(f"    ⚠️ 过滤无效改写(缺失槽位值): {para_text} (slots: {orig_slots})")
 
     return paraphrased
 
