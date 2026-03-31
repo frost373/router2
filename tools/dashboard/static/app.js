@@ -154,6 +154,13 @@ async function loadConfig() {
         gameSelect.addEventListener('change', () => loadCommands(gameSelect.value));
         cmdGameSelect.addEventListener('change', () => renderCommandsPage());
 
+        // 思考模式 toggle 显示/隐藏等级下拉框
+        const thinkModeToggle = document.getElementById('cfg-think-mode');
+        const thinkLevelGroup = document.getElementById('cfg-think-level-group');
+        thinkModeToggle.addEventListener('change', () => {
+            thinkLevelGroup.style.display = thinkModeToggle.checked ? 'block' : 'none';
+        });
+
         // 绑定按钮
         document.getElementById('btn-generate').addEventListener('click', startGenerate);
         document.getElementById('btn-stop').addEventListener('click', stopGenerate);
@@ -194,6 +201,8 @@ async function startGenerate() {
         game: document.getElementById('cfg-game').value,
         model: document.getElementById('cfg-model').value || null,
         command_id: document.getElementById('cfg-command').value || null,
+        think_mode: document.getElementById('cfg-think-mode').checked,
+        think_level: document.getElementById('cfg-think-level').value,
         template_count: parseInt(document.getElementById('cfg-template').value),
         adversarial_source: parseInt(document.getElementById('cfg-adversarial').value),
         paraphrase_source: parseInt(document.getElementById('cfg-paraphrase').value),

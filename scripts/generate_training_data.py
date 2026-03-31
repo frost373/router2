@@ -28,6 +28,12 @@ def parse_args():
         "--model", default=None, help="LLM 模型名称（默认 glm-5）"
     )
     parser.add_argument(
+        "--think_mode", action="store_true", help="开启思考模式"
+    )
+    parser.add_argument(
+        "--think_level", default="high", help="思考等级（low/medium/high）"
+    )
+    parser.add_argument(
         "--skip_vocab", action="store_true", help="跳过词库生成（使用已有词库）"
     )
     parser.add_argument(

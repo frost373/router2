@@ -58,7 +58,7 @@ class TaskState:
         self.step_statuses = ["waiting"] * 7   # waiting / running / done / skipped
         self.finished = False
         self.error = False
-        self.subscribers: list[asyncio.Queue] = []
+        self.subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
         self.lock = threading.Lock()
 
     def reset(self):
@@ -70,10 +70,17 @@ class TaskState:
 
     def broadcast(self, event: dict):
         """向所有 SSE 订阅者推送事件"""
-        for q in self.subscribers:
+        def _push(q, e):
             try:
-                q.put_nowait(event)
+                q.put_nowait(e)
             except asyncio.QueueFull:
+                pass
+
+        for q, loop in self.subscribers:
+            try:
+                if not loop.is_closed():
+                    loop.call_soon_threadsafe(_push, q, event)
+            except Exception:
                 pass
 
 task_state = TaskState()
@@ -191,6 +198,8 @@ class GenerateRequest(BaseModel):
     game: str = "mmorpg"
     model: Optional[str] = None
     command_id: Optional[str] = None
+    think_mode: bool = False
+    think_level: str = "high"
     template_count: int = 40
     adversarial_source: int = 10
     paraphrase_source: int = 5
@@ -205,6 +214,7 @@ def _run_generate(args: GenerateRequest):
     """在后台线程中运行生成脚本"""
     cmd = [
         sys.executable,
+        "-u",
         str(SCRIPTS_DIR / "generate_training_data.py"),
         "--game", args.game,
         "--template_count", str(args.template_count),
@@ -217,12 +227,18 @@ def _run_generate(args: GenerateRequest):
         cmd.extend(["--model", args.model])
     if args.command_id:
         cmd.extend(["--command_id", args.command_id])
+    if args.think_mode:
+        cmd.append("--think_mode")
+        cmd.extend(["--think_level", args.think_level])
     if args.skip_vocab:
         cmd.append("--skip_vocab")
     if args.skip_aliases:
         cmd.append("--skip_aliases")
     if args.skip_global_negatives:
         cmd.append("--skip_global_negatives")
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
 
     try:
         # CREATE_NEW_PROCESS_GROUP 避免子进程 Ctrl+C 信号影响父进程
@@ -235,6 +251,7 @@ def _run_generate(args: GenerateRequest):
             errors="replace",
             cwd=str(SCRIPTS_DIR),
             bufsize=1,
+            env=env,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
         task_state.process = proc
@@ -337,10 +354,13 @@ def api_validate(game: str):
         raise HTTPException(404, f"commands/{game}.json 不存在")
 
     try:
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
         result = subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "validate_commands.py"), str(cmd_path)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30,
+            env=env
         )
         return {
             "passed": result.returncode == 0,
@@ -442,7 +462,9 @@ def api_global_negatives(game: str):
 async def api_stream():
     """SSE 端点：实时推送生成日志和步骤进度"""
     queue: asyncio.Queue = asyncio.Queue(maxsize=500)
-    task_state.subscribers.append(queue)
+    loop = asyncio.get_running_loop()
+    subscriber = (queue, loop)
+    task_state.subscribers.append(subscriber)
 
     async def event_generator():
         try:
@@ -469,8 +491,8 @@ async def api_stream():
         except asyncio.CancelledError:
             pass
         finally:
-            if queue in task_state.subscribers:
-                task_state.subscribers.remove(queue)
+            if subscriber in task_state.subscribers:
+                task_state.subscribers.remove(subscriber)
 
     return EventSourceResponse(event_generator())
 

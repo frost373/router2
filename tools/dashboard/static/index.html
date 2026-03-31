@@ -46,6 +46,18 @@
                         <label>LLM 模型</label>
                         <select id="cfg-model" class="form-control"></select>
                     </div>
+                    <div class="form-group toggle-group">
+                        <label>开启思考模式</label>
+                        <label class="toggle"><input type="checkbox" id="cfg-think-mode"><span class="toggle-slider"></span></label>
+                    </div>
+                    <div class="form-group" id="cfg-think-level-group" style="display: none;">
+                        <label>思考等级</label>
+                        <select id="cfg-think-level" class="form-control">
+                            <option value="low">Low (1-3s)</option>
+                            <option value="medium">Medium (5-10s)</option>
+                            <option value="high" selected>High (10-20s)</option>
+                        </select>
+                    </div>
                     <div class="form-group">
                         <label>指定 Command</label>
                         <select id="cfg-command" class="form-control">
