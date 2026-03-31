@@ -497,6 +497,33 @@ async def api_stream():
     return EventSourceResponse(event_generator())
 
 
+# ── LLM 日志 API ───────────────────────────────────────────
+
+LLM_LOG_PATH = PROJECT_DIR / "logs" / "llm_interaction.log"
+
+@app.get("/api/llm-log-size")
+def api_llm_log_size():
+    """获取 LLM 日志文件大小"""
+    if not LLM_LOG_PATH.exists():
+        return {"size": 0}
+    return {"size": LLM_LOG_PATH.stat().st_size}
+
+
+@app.get("/api/llm-log")
+def api_llm_log(from_pos: int = 0):
+    """从指定位置读取 LLM 日志新增内容"""
+    if not LLM_LOG_PATH.exists():
+        return ""
+
+    try:
+        with open(LLM_LOG_PATH, "r", encoding="utf-8") as f:
+            f.seek(from_pos)
+            new_content = f.read()
+        return new_content
+    except Exception:
+        return ""
+
+
 # ── 静态文件 + 首页 ──────────────────────────────────────
 STATIC_DIR = DASHBOARD_DIR / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

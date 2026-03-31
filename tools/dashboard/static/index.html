@@ -197,11 +197,19 @@
                         </div>
                     </div>
 
-                    <!-- 日志窗口 -->
+                    <!-- 日志窗口（左右双栏） -->
                     <div class="log-section">
-                        <h3>📝 实时日志 <span class="log-count" id="log-count">0</span></h3>
-                        <div class="log-window" id="log-window">
-                            <div class="log-placeholder">等待生成任务启动...</div>
+                        <div class="log-header">
+                            <h3>📝 生成日志 <span class="log-count" id="log-count">0</span></h3>
+                            <h3>🤖 LLM 交互 <span class="log-count" id="llm-log-count">0</span></h3>
+                        </div>
+                        <div class="log-split-view">
+                            <div class="log-window" id="log-window">
+                                <div class="log-placeholder">等待生成任务启动...</div>
+                            </div>
+                            <div class="log-window" id="llm-log-window">
+                                <div class="log-placeholder">等待 LLM 调用...</div>
+                            </div>
                         </div>
                     </div>
                 </div>

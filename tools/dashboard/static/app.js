@@ -275,6 +275,7 @@ function handleSSEEvent(data) {
                 // 如果有 running 状态则标记运行中
                 if (data.statuses.some(s => s === 'running')) {
                     setRunningState(true);
+                    startLlmLogPolling();  // 开始 LLM 日志轮询
                 }
             }
             break;
@@ -282,16 +283,19 @@ function handleSSEEvent(data) {
             updatePipeline(data.statuses);
             setRunningState(false);
             setStatusDone();
+            stopLlmLogPolling();  // 停止 LLM 日志轮询
             loadStats();
             break;
         case 'error':
             appendLog(`[ERROR] ${data.message}`, 'error-line');
             setRunningState(false);
+            stopLlmLogPolling();
             setStatusError();
             break;
         case 'stopped':
             appendLog(`[STOP] ${data.message}`, 'error-line');
             setRunningState(false);
+            stopLlmLogPolling();
             break;
     }
 }
@@ -336,12 +340,22 @@ function setStatusError() {
 
 // ── 日志 ──────────────────────────────────────────────────
 let logCount = 0;
+let llmLogCount = 0;
+let lastLlmLogSize = 0;
+let llmLogPollInterval = null;
 
 function clearLogs() {
     const win = document.getElementById('log-window');
     win.innerHTML = '';
     logCount = 0;
     document.getElementById('log-count').textContent = '0';
+
+    // 清空 LLM 日志
+    const llmWin = document.getElementById('llm-log-window');
+    llmWin.innerHTML = '<div class="log-placeholder">等待 LLM 调用...</div>';
+    llmLogCount = 0;
+    document.getElementById('llm-log-count').textContent = '0';
+    lastLlmLogSize = 0;
 }
 
 function appendLog(line, extraClass = '') {
@@ -370,6 +384,86 @@ function appendLog(line, extraClass = '') {
 
     logCount++;
     document.getElementById('log-count').textContent = logCount;
+
+    // 自动滚动到底部
+    win.scrollTop = win.scrollHeight;
+}
+
+// ── LLM 日志轮询 ─────────────────────────────────────────
+function startLlmLogPolling() {
+    if (llmLogPollInterval) return;
+
+    // 先获取初始大小
+    fetchLlmLogSize();
+
+    llmLogPollInterval = setInterval(async () => {
+        try {
+            const res = await fetch(`${API}/api/llm-log-size`);
+            const data = await res.json();
+            const newSize = data.size || 0;
+
+            if (newSize > lastLlmLogSize) {
+                // 有新内容，获取新增部分
+                const res2 = await fetch(`${API}/api/llm-log?from=${lastLlmLogSize}`);
+                const text = await res2.text();
+                if (text) {
+                    appendLlmLog(text);
+                }
+                lastLlmLogSize = newSize;
+            } else if (newSize < lastLlmLogSize) {
+                // 文件被重置，重新开始
+                lastLlmLogSize = 0;
+                const llmWin = document.getElementById('llm-log-window');
+                llmWin.innerHTML = '';
+                llmLogCount = 0;
+                document.getElementById('llm-log-count').textContent = '0';
+            }
+        } catch (e) {
+            // 忽略轮询错误
+        }
+    }, 1000);
+}
+
+function stopLlmLogPolling() {
+    if (llmLogPollInterval) {
+        clearInterval(llmLogPollInterval);
+        llmLogPollInterval = null;
+    }
+}
+
+async function fetchLlmLogSize() {
+    try {
+        const res = await fetch(`${API}/api/llm-log-size`);
+        const data = await res.json();
+        lastLlmLogSize = data.size || 0;
+    } catch (e) {
+        lastLlmLogSize = 0;
+    }
+}
+
+function appendLlmLog(text) {
+    const win = document.getElementById('llm-log-window');
+
+    // 移除占位符
+    const placeholder = win.querySelector('.log-placeholder');
+    if (placeholder) placeholder.remove();
+
+    // 按行分割并添加
+    const lines = text.split('\n').filter(l => l.trim());
+    lines.forEach(line => {
+        const div = document.createElement('div');
+        div.className = 'log-line';
+        div.textContent = line;
+        win.appendChild(div);
+        llmLogCount++;
+    });
+
+    document.getElementById('llm-log-count').textContent = llmLogCount;
+
+    // 保留最近 500 行
+    while (win.children.length > 500) {
+        win.removeChild(win.firstChild);
+    }
 
     // 自动滚动到底部
     win.scrollTop = win.scrollHeight;
