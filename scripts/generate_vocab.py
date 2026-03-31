@@ -63,7 +63,7 @@ def generate_vocab(game: str = "mmorpg", command_id: str | None = None, model: s
         
         # 如果没有slots，则不需要生成词库
         if not slots:
-            print(f"  ⏭️  {cid}: 无参数，跳过生成词库")
+            print(f"  [SKIP] {cid}: 无参数，跳过生成词库")
             continue
             
         print(f"  调用 LLM 生成词库 [{cid}]...")
@@ -79,7 +79,7 @@ def generate_vocab(game: str = "mmorpg", command_id: str | None = None, model: s
         assert "uses" in vocab, f"{cid} 词库缺少 uses"
         assert "target_use_pairs" in vocab, f"{cid} 词库缺少 target_use_pairs"
 
-        print(f"  ✅ {cid} 生成完成:")
+        print(f"  [OK] {cid} 生成完成:")
         print(f"     targets: {len(vocab['targets'])} 个")
         print(f"     uses: {len(vocab['uses'])} 个")
         print(f"     target_use_pairs: {len(vocab['target_use_pairs'])} 对")

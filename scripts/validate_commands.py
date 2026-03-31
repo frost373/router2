@@ -29,14 +29,14 @@ def validate_file(filepath: str):
 
     # ── 1. 读取 JSON ──
     if not os.path.isfile(filepath):
-        print(f"❌ 文件不存在: {filepath}")
+        print(f"[ERROR] 文件不存在: {filepath}")
         return False
 
     with open(filepath, "r", encoding="utf-8") as f:
         try:
             data = json.load(f)
         except json.JSONDecodeError as e:
-            print(f"❌ JSON 解析失败: {e}")
+            print(f"[ERROR] JSON 解析失败: {e}")
             return False
 
     # ── 2. 根结构校验 ──
@@ -204,17 +204,17 @@ def _print_result(errors: list[str], warnings: list[str], filepath: str):
     print("=" * 60)
 
     if warnings:
-        print(f"\n⚠️  警告 ({len(warnings)}):")
+        print(f"\n[WARN] 警告 ({len(warnings)}):")
         for w in warnings:
-            print(f"   ⚠️  {w}")
+            print(f"   [WARN] {w}")
 
     if errors:
-        print(f"\n❌ 错误 ({len(errors)}):")
+        print(f"\n[ERROR] 错误 ({len(errors)}):")
         for e in errors:
-            print(f"   ❌ {e}")
-        print(f"\n校验结果: ❌ 失败 (共 {len(errors)} 个错误)")
+            print(f"   [ERROR] {e}")
+        print(f"\n校验结果: FAILED (共 {len(errors)} 个错误)")
     else:
-        print(f"\n校验结果: ✅ 通过")
+        print(f"\n校验结果: PASSED")
 
 
 def _print_statistics(commands: list[dict]):
@@ -229,11 +229,11 @@ def _print_statistics(commands: list[dict]):
     dual_param = sum(1 for c in commands if len(c.get("slots", [])) == 2)
 
     print(f"\n  总 command 数量: {total}")
-    print(f"\n  📊 无参数 vs 有参数:")
+    print(f"\n  [STATS] 无参数 vs 有参数:")
     print(f"     无参数: {no_param} ({no_param/total*100:.1f}%)")
     print(f"     有参数: {has_param} ({has_param/total*100:.1f}%)")
 
-    print(f"\n  📊 单参数 vs 双参数 (仅统计有参数的 {has_param} 个):")
+    print(f"\n  [STATS] 单参数 vs 双参数 (仅统计有参数的 {has_param} 个):")
     print(f"     单参数: {single_param} ({single_param/has_param*100:.1f}%)" if has_param else "     单参数: 0")
     print(f"     双参数: {dual_param} ({dual_param/has_param*100:.1f}%)" if has_param else "     双参数: 0")
 
@@ -246,7 +246,7 @@ def _print_statistics(commands: list[dict]):
         1 for c in commands
         if len(c.get("slots", [])) == 1 and c["slots"][0].get("name") == "use"
     )
-    print(f"\n  📊 参数类型分布:")
+    print(f"\n  [STATS] 参数类型分布:")
     print(f"     仅 target:      {target_only}")
     print(f"     仅 use:         {use_only}")
     print(f"     use + target:   {dual_param}")

@@ -93,7 +93,7 @@ def generate_one_round(
     try:
         result = json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"    ⚠️ JSON 解析失败: {e}")
+        print(f"    [WARN] JSON 解析失败: {e}")
         print(f"    原始文本前 300 字符: {text[:300]}")
         return []
 
@@ -109,7 +109,7 @@ def generate_one_round(
         if inp and label_type in ("tactical", "chat") and bucket:
             valid.append(item)
         else:
-            print(f"    ⚠️ 跳过无效样本: {item}")
+            print(f"    [WARN] 跳过无效样本: {item}")
 
     return valid
 
@@ -169,14 +169,14 @@ def generate_global_negatives(
                 model=model, round_num=r,
             )
             all_samples.extend(batch)
-            print(f"    ✅ 第 {r} 轮生成 {len(batch)} 条")
+            print(f"    [OK] 第 {r} 轮生成 {len(batch)} 条")
         except Exception as e:
-            print(f"    ❌ 第 {r} 轮失败: {e}")
+            print(f"    [ERROR] 第 {r} 轮失败: {e}")
 
     print(f"\n  合计生成: {len(all_samples)} 条（去重前）")
 
     if not all_samples:
-        print("  ⚠️ 未生成任何样本")
+        print("  [WARN] 未生成任何样本")
         return []
 
     # Embedding 语义去重
@@ -199,12 +199,12 @@ def generate_global_negatives(
         lt = s.get("label", {}).get("type", "unknown")
         label_counts[lt] = label_counts.get(lt, 0) + 1
 
-    print(f"\n  📊 按 label 分布:")
+    print(f"\n  [STATS] 按 label 分布:")
     for label, count in sorted(label_counts.items()):
         pct = count / len(deduped) * 100 if deduped else 0
         print(f"     {label}: {count} ({pct:.1f}%)")
 
-    print(f"\n  📊 按 bucket 分布:")
+    print(f"\n  [STATS] 按 bucket 分布:")
     for bucket, count in sorted(bucket_counts.items()):
         print(f"     {bucket}: {count}")
 
@@ -217,7 +217,7 @@ def generate_global_negatives(
         for s in deduped:
             f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
-    print(f"\n  ✅ 已保存到 {out_path}")
+    print(f"\n  [OK] 已保存到 {out_path}")
     print(f"     共 {len(deduped)} 条全局负样本")
 
     return deduped

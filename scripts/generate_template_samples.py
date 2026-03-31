@@ -134,7 +134,7 @@ def generate_template_samples(
             templates = cmd["aliases"]
 
         if not templates:
-            print(f"  ⚠️  {cid}: 无可用模板，跳过")
+            print(f"  [WARN] {cid}: 无可用模板，跳过")
             continue
 
         samples = []
@@ -180,7 +180,7 @@ def generate_template_samples(
             for s in samples_list:
                 f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
-    print(f"\n  ✅ 总计 {len(all_samples)} 条模板样本")
+    print(f"\n  [OK] 总计 {len(all_samples)} 条模板样本")
     print(f"     保存到: {out_path}")
     return all_samples
 

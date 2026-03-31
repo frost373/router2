@@ -118,7 +118,7 @@ def get_embeddings(
                 last_error = e
                 if attempt < max_retries:
                     wait = retry_delay * attempt
-                    print(f"  ⚠️  Embedding 调用失败 (尝试 {attempt}/{max_retries}): {e}")
+                    print(f"  [WARN] Embedding 调用失败 (尝试 {attempt}/{max_retries}): {e}")
                     print(f"     {wait}s 后重试...")
                     time.sleep(wait)
                 else:
@@ -203,7 +203,7 @@ if __name__ == "__main__":
 
     print(f"测试文本: {test_texts}")
     embeddings = get_embeddings(test_texts)
-    print(f"✅ 成功获取 {len(embeddings)} 个向量")
+    print(f"[OK] 成功获取 {len(embeddings)} 个向量")
     print(f"   向量维度: {len(embeddings[0])}")
 
     print("\n相似度矩阵:")

@@ -79,7 +79,7 @@ def paraphrase_batch(
                     "source_text": source,
                 })
             else:
-                print(f"    ⚠️ 过滤无效改写(缺失槽位值): {para_text} (slots: {orig_slots})")
+                print(f"    [WARN] 过滤无效改写(缺失槽位值): {para_text} (slots: {orig_slots})")
 
     return paraphrased
 
@@ -156,9 +156,9 @@ def generate_paraphrase_samples(
             all_paraphrased.extend(results)
             print(f"    生成 {len(results)} 条改写样本")
         except Exception as e:
-            print(f"    ❌ 批次 {batch_num} 失败: {e}")
+            print(f"    [ERROR] 批次 {batch_num} 失败: {e}")
 
-    print(f"\n  ✅ 总计 {len(all_paraphrased)} 条 paraphrase 样本")
+    print(f"\n  [OK] 总计 {len(all_paraphrased)} 条 paraphrase 样本")
 
     # 保存（按 command_id 分目录）
     by_cmd: dict[str, list[dict]] = {}

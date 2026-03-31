@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>训练数据生成器 — Dashboard</title>
+    <meta name="description" content="AI队友指令路由器训练数据生成可视化面板">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- 顶部导航 -->
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <span class="brand-icon">⚡</span>
+            <span class="brand-text">Router<span class="brand-accent">2</span> DataGen</span>
+        </div>
+        <div class="nav-tabs">
+            <button class="nav-tab active" data-page="dashboard" id="nav-dashboard">
+                <span class="tab-icon">📊</span> 控制台
+            </button>
+            <button class="nav-tab" data-page="commands" id="nav-commands">
+                <span class="tab-icon">📋</span> Commands
+            </button>
+        </div>
+        <div class="nav-status">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">就绪</span>
+        </div>
+    </nav>
+
+    <!-- 页面: 控制台 -->
+    <div class="page active" id="page-dashboard">
+        <div class="dashboard-layout">
+            <!-- 左侧配置面板 -->
+            <aside class="config-panel">
+                <div class="panel-header">
+                    <h2>⚙️ 生成配置</h2>
+                </div>
+                <div class="panel-body">
+                    <div class="form-group">
+                        <label>游戏类型</label>
+                        <select id="cfg-game" class="form-control"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>LLM 模型</label>
+                        <select id="cfg-model" class="form-control"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>指定 Command</label>
+                        <select id="cfg-command" class="form-control">
+                            <option value="">全部</option>
+                        </select>
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <div class="form-group">
+                        <label>模板样本数</label>
+                        <input type="number" id="cfg-template" class="form-control" value="40" min="1" max="200">
+                    </div>
+                    <div class="form-group">
+                        <label>对抗样本源数</label>
+                        <input type="number" id="cfg-adversarial" class="form-control" value="10" min="1" max="50">
+                    </div>
+                    <div class="form-group">
+                        <label>Paraphrase 源数</label>
+                        <input type="number" id="cfg-paraphrase" class="form-control" value="5" min="1" max="30">
+                    </div>
+                    <div class="form-group">
+                        <label>全局负样本轮数</label>
+                        <input type="number" id="cfg-rounds" class="form-control" value="3" min="1" max="20">
+                    </div>
+                    <div class="form-group">
+                        <label>去重阈值 <span class="threshold-value" id="threshold-display">0.92</span></label>
+                        <input type="range" id="cfg-threshold" class="form-range" min="0.80" max="0.99" step="0.01" value="0.92">
+                    </div>
+
+                    <div class="form-divider"></div>
+
+                    <div class="form-group toggle-group">
+                        <label>跳过词库生成</label>
+                        <label class="toggle"><input type="checkbox" id="cfg-skip-vocab"><span class="toggle-slider"></span></label>
+                    </div>
+                    <div class="form-group toggle-group">
+                        <label>跳过别名扩写</label>
+                        <label class="toggle"><input type="checkbox" id="cfg-skip-aliases"><span class="toggle-slider"></span></label>
+                    </div>
+                    <div class="form-group toggle-group">
+                        <label>跳过全局负样本</label>
+                        <label class="toggle"><input type="checkbox" id="cfg-skip-global"><span class="toggle-slider"></span></label>
+                    </div>
+                </div>
+                <div class="panel-footer">
+                    <button class="btn btn-primary btn-generate" id="btn-generate">
+                        <span class="btn-icon">🚀</span> 开始生成
+                    </button>
+                    <button class="btn btn-danger btn-stop hidden" id="btn-stop">
+                        <span class="btn-icon">⏹</span> 停止
+                    </button>
+                </div>
+            </aside>
+
+            <!-- 右侧主内容 -->
+            <main class="main-content">
+                <!-- 子 Tab -->
+                <div class="content-tabs">
+                    <button class="content-tab active" data-tab="progress" id="tab-progress">🔄 进度</button>
+                    <button class="content-tab" data-tab="data" id="tab-data">📦 数据浏览</button>
+                </div>
+
+                <!-- Tab: 进度 -->
+                <div class="tab-content active" id="content-progress">
+                    <!-- Pipeline 步骤条 -->
+                    <div class="pipeline-section">
+                        <h3>Pipeline 进度</h3>
+                        <div class="pipeline-steps" id="pipeline-steps">
+                            <div class="pipe-step" data-step="0">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">词库生成</div>
+                            </div>
+                            <div class="pipe-connector"></div>
+                            <div class="pipe-step" data-step="1">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">别名扩写</div>
+                            </div>
+                            <div class="pipe-connector"></div>
+                            <div class="pipe-step" data-step="2">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">模板填槽</div>
+                            </div>
+                            <div class="pipe-connector"></div>
+                            <div class="pipe-step" data-step="3">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">对抗样本</div>
+                            </div>
+                            <div class="pipe-connector"></div>
+                            <div class="pipe-step" data-step="4">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">Paraphrase</div>
+                            </div>
+                            <div class="pipe-connector"></div>
+                            <div class="pipe-step" data-step="5">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">全局负样本</div>
+                            </div>
+                            <div class="pipe-connector"></div>
+                            <div class="pipe-step" data-step="6">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">合并输出</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 统计卡片 -->
+                    <div class="stats-section hidden" id="stats-section">
+                        <h3>📊 生成统计</h3>
+                        <div class="stats-grid">
+                            <div class="stat-card stat-total">
+                                <div class="stat-value" id="stat-total">0</div>
+                                <div class="stat-label">总样本数</div>
+                            </div>
+                            <div class="stat-card stat-qc">
+                                <div class="stat-value" id="stat-qc">0</div>
+                                <div class="stat-label">quick_command</div>
+                            </div>
+                            <div class="stat-card stat-tac">
+                                <div class="stat-value" id="stat-tactical">0</div>
+                                <div class="stat-label">tactical</div>
+                            </div>
+                            <div class="stat-card stat-chat">
+                                <div class="stat-value" id="stat-chat">0</div>
+                                <div class="stat-label">chat</div>
+                            </div>
+                        </div>
+                        <div class="charts-row">
+                            <div class="chart-container">
+                                <h4>Label 分布</h4>
+                                <canvas id="chart-labels" width="240" height="240"></canvas>
+                            </div>
+                            <div class="chart-container">
+                                <h4>Source Type 分布</h4>
+                                <canvas id="chart-sources" width="360" height="240"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 日志窗口 -->
+                    <div class="log-section">
+                        <h3>📝 实时日志 <span class="log-count" id="log-count">0</span></h3>
+                        <div class="log-window" id="log-window">
+                            <div class="log-placeholder">等待生成任务启动...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab: 数据浏览 -->
+                <div class="tab-content" id="content-data">
+                    <!-- 数据浏览工具栏 -->
+                    <div class="data-toolbar">
+                        <button class="btn btn-sm btn-outline active" data-filter="all" id="filter-all">全部</button>
+                        <button class="btn btn-sm btn-outline" data-filter="template" id="filter-template">Template</button>
+                        <button class="btn btn-sm btn-outline" data-filter="adversarial" id="filter-adversarial">Adversarial</button>
+                        <button class="btn btn-sm btn-outline" data-filter="paraphrase" id="filter-paraphrase">Paraphrase</button>
+                        <button class="btn btn-sm btn-outline" data-filter="global_negative" id="filter-global">Global Neg</button>
+                    </div>
+
+                    <!-- Command 卡片网格 -->
+                    <div class="data-grid" id="data-grid">
+                        <div class="data-placeholder">
+                            <span class="placeholder-icon">📦</span>
+                            <p>点击上方 "刷新" 加载已生成的数据</p>
+                        </div>
+                    </div>
+
+                    <!-- 样本详情弹窗 -->
+                    <div class="modal-backdrop hidden" id="modal-backdrop">
+                        <div class="modal" id="sample-modal">
+                            <div class="modal-header">
+                                <h3 id="modal-title">样本详情</h3>
+                                <button class="modal-close" id="modal-close">&times;</button>
+                            </div>
+                            <div class="modal-body" id="modal-body"></div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- 页面: Commands 查看 -->
+    <div class="page" id="page-commands">
+        <div class="commands-container">
+            <div class="commands-header">
+                <h2>📋 指令注册表</h2>
+                <div class="commands-tools">
+                    <select id="cmd-game-select" class="form-control"></select>
+                    <button class="btn btn-sm btn-outline" id="btn-validate">🔍 校验</button>
+                </div>
+            </div>
+            <div class="validate-result hidden" id="validate-result"></div>
+            <div class="commands-grid" id="commands-grid">
+                <div class="data-placeholder">
+                    <span class="placeholder-icon">📋</span>
+                    <p>加载中...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

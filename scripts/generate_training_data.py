@@ -134,6 +134,9 @@ def merge_outputs(game: str, command_id: str | None = None):
     label_counts: dict[str, int] = {}
     for s in all_samples:
         label = s.get("label", "unknown")
+        # 兼容 label 为 dict（如 {"type": "tactical"}）和字符串两种格式
+        if isinstance(label, dict):
+            label = label.get("type", "unknown")
         label_counts[label] = label_counts.get(label, 0) + 1
 
     type_counts: dict[str, int] = {}
@@ -144,13 +147,13 @@ def merge_outputs(game: str, command_id: str | None = None):
     print(f"\n  合并完成: {len(all_samples)} 条")
     print(f"  保存到: {merged_all_path}")
 
-    print(f"\n  📊 按 label 分布:")
+    print(f"\n  [STATS] 按 label 分布:")
     total = len(all_samples)
     for label, count in sorted(label_counts.items()):
         pct = count / total * 100 if total else 0
         print(f"     {label}: {count} ({pct:.1f}%)")
 
-    print(f"\n  📊 按 source_type 分布:")
+    print(f"\n  [STATS] 按 source_type 分布:")
     for st, count in sorted(type_counts.items()):
         pct = count / total * 100 if total else 0
         print(f"     {st}: {count} ({pct:.1f}%)")
@@ -173,14 +176,14 @@ def main():
         from generate_vocab import generate_vocab
         generate_vocab(args.game, command_id=args.command_id, model=args.model)
     else:
-        print("\n  ⏭️  跳过词库生成（使用已有词库）")
+        print("\n  [SKIP] 跳过词库生成（使用已有词库）")
 
     # Step 2: 别名扩写
     if not args.skip_aliases:
         from expand_aliases import expand_aliases
         expand_aliases(args.game, command_id=args.command_id, model=args.model)
     else:
-        print("\n  ⏭️  跳过别名扩写（使用已有扩写结果）")
+        print("\n  [SKIP] 跳过别名扩写（使用已有扩写结果）")
 
     # Step 3: 模板样本
     from generate_template_samples import generate_template_samples
@@ -218,13 +221,13 @@ def main():
             dedup_threshold=args.dedup_threshold,
         )
     else:
-        print("\n  ⏭️  跳过全局负样本生成（使用已有结果）")
+        print("\n  [SKIP] 跳过全局负样本生成（使用已有结果）")
 
     # Step 6: 合并
     merge_outputs(args.game, command_id=args.command_id)
 
     print(f"\n{'='*60}")
-    print(f"  ✅ 全部完成！")
+    print(f"  [OK] 全部完成！")
     print(f"{'='*60}")
 
 

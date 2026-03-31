@@ -95,7 +95,7 @@ if __name__ == "__main__":
     results = []
     for fp in files:
         if not os.path.isfile(fp):
-            print(f"❌ 文件不存在: {fp}", file=sys.stderr)
+            print(f"[ERROR] 文件不存在: {fp}", file=sys.stderr)
             sys.exit(1)
         result = compact_file(fp)
         results.append(result)
@@ -107,6 +107,6 @@ if __name__ == "__main__":
         os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(output_text)
-        print(f"✅ 已输出到 {args.output}（{len(output_text)} 字符）")
+        print(f"[OK] 已输出到 {args.output}（{len(output_text)} 字符）")
     else:
         print(output_text)

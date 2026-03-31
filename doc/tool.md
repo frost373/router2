@@ -398,3 +398,72 @@ print(f"去重: {stats['before']} → {stats['after']}")
 ```bash
 python scripts/embedding_client.py
 ```
+
+## 6. Dashboard 可视化面板
+
+**目录路径：** `tools/dashboard/`
+
+### 功能说明
+
+基于 FastAPI + 原生 HTML/CSS/JS 的 Web 可视化面板，用于**配置生成参数、触发生成任务、实时查看进度日志、展示数据统计和浏览生成样本**。
+
+### 启动方式
+
+```bash
+# 安装依赖（首次）
+python -m pip install -r tools/dashboard/requirements.txt
+
+# 启动服务
+python tools/dashboard/server.py
+```
+
+浏览器打开 `http://localhost:8765`
+
+### 功能模块
+
+#### 1）控制台页面
+
+- **配置面板（左侧）**：游戏类型、LLM 模型、指定 Command、各类样本数量、跳过选项等
+- **Pipeline 进度条**：7 步骤可视化（词库→扩写→模板→对抗→Paraphrase→全局负样本→合并），实时切换 ⏳/🔄/✅/⏭️ 状态
+- **实时日志**：SSE 推送的 Python 脚本输出，自动滚动
+- **统计卡片 + 图表**：总样本数、label 分布（环形图）、source_type 分布（条形图）
+
+#### 2）数据浏览器（Tab 切换）
+
+- **Command 卡片列表**：每个 command 的 template/adversarial/paraphrase 样本统计
+- **全局负样本卡片**：按 bucket 分组浏览
+- **点击展开样本表格**：带 label 标签色彩编码和 slots 展示
+- **按类型筛选**：All / Template / Adversarial / Paraphrase / Global Neg
+
+#### 3）Commands 查看页面
+
+- 卡片式展示指令注册表（ID、描述、Slots、Aliases）
+- 一键校验按钮（调用 `validate_commands.py`）
+
+### API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/config` | 获取 game 列表、模型列表、默认参数 |
+| GET | `/api/commands/{game}` | 获取 commands 列表 |
+| GET | `/api/commands/{game}/validate` | 运行校验并返回结果 |
+| POST | `/api/generate` | 触发数据生成任务 |
+| GET | `/api/generate/status` | 获取当前任务状态 |
+| POST | `/api/generate/stop` | 停止当前任务 |
+| GET | `/api/output/{game}` | 获取输出统计概览 |
+| GET | `/api/output/{game}/{command_id}/{file_type}` | 获取样本数据 |
+| GET | `/api/output/{game}/global_negatives` | 获取全局负样本 |
+| GET | `/api/stream` | SSE 实时推送日志 |
+
+### 文件结构
+
+```
+tools/dashboard/
+├── server.py          # FastAPI 后端
+├── requirements.txt   # Python 依赖
+└── static/
+    ├── index.html     # 前端页面
+    ├── style.css      # 深色主题样式
+    └── app.js         # 前端逻辑
+```
+

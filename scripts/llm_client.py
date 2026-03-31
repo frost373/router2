@@ -164,11 +164,11 @@ def call_llm(
             last_error = e
             if attempt < max_retries:
                 wait = retry_delay * attempt
-                print(f"  ⚠️  LLM 调用失败 (尝试 {attempt}/{max_retries}): {e}")
+                print(f"  [WARN] LLM 调用失败 (尝试 {attempt}/{max_retries}): {e}")
                 print(f"     {wait}s 后重试...")
                 time.sleep(wait)
             else:
-                print(f"  ❌ LLM 调用失败，已达最大重试次数: {e}")
+                print(f"  [ERROR] LLM 调用失败，已达最大重试次数: {e}")
 
     raise RuntimeError(f"LLM 调用最终失败: {last_error}")
 
@@ -200,7 +200,7 @@ def call_llm_json(
     try:
         return json.loads(text)
     except json.JSONDecodeError as e:
-        print(f"  ⚠️  JSON 解析失败，原始文本:\n{raw[:500]}")
+        print(f"  [WARN] JSON 解析失败，原始文本:\n{raw[:500]}")
         raise ValueError(f"LLM 返回无法解析为 JSON: {e}") from e
 
 

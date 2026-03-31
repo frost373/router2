@@ -113,7 +113,7 @@ def expand_aliases(
         out_path = os.path.join(cmd_dir, "aliases.json")
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({cid: data}, f, ensure_ascii=False, indent=2)
-        print(f"  ✅ {cid} 保存到: {out_path}")
+        print(f"  [OK] {cid} 保存到: {out_path}")
     return result
 
 

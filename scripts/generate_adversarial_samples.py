@@ -147,13 +147,13 @@ def generate_adversarial_samples(
             all_adversarial.extend(results)
             print(f"    生成 {len(results)} 条对抗样本")
         except Exception as e:
-            print(f"    ❌ 批次 {batch_num} 失败: {e}")
+            print(f"    [ERROR] 批次 {batch_num} 失败: {e}")
 
     # 统计
     tactical_count = sum(1 for s in all_adversarial if s["label"] == "tactical")
     chat_count = sum(1 for s in all_adversarial if s["label"] == "chat")
 
-    print(f"\n  ✅ 总计 {len(all_adversarial)} 条对抗样本")
+    print(f"\n  [OK] 总计 {len(all_adversarial)} 条对抗样本")
     print(f"     tactical: {tactical_count}")
     print(f"     chat: {chat_count}")
 
