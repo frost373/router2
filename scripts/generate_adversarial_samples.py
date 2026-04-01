@@ -29,6 +29,8 @@ def generate_adversarial_batch(
     positive_samples: list[dict],
     template: str,
     model: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> list[dict]:
     """
     对一批正样本生成对抗样本
@@ -47,7 +49,14 @@ def generate_adversarial_batch(
     input_json = json.dumps(input_items, ensure_ascii=False, indent=2)
     prompt = template.replace("{{positive_samples}}", input_json)
 
-    result = call_llm_json(prompt, model=model, temperature=0.8, max_tokens=8192)
+    result = call_llm_json(
+        prompt,
+        model=model,
+        temperature=0.8,
+        max_tokens=8192,
+        think_mode=think_mode,
+        think_level=think_level,
+    )
 
     adversarial = []
     for item in result:
@@ -77,6 +86,8 @@ def generate_adversarial_samples(
     command_id: str | None = None,
     max_source_per_command: int = 10,
     model: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> list[dict]:
     """
     生成最小编辑对抗样本
@@ -143,7 +154,13 @@ def generate_adversarial_samples(
         print(f"\n  批次 {batch_num}/{total_batches} ({len(batch)} 条)...")
 
         try:
-            results = generate_adversarial_batch(batch, template, model=model)
+            results = generate_adversarial_batch(
+                batch,
+                template,
+                model=model,
+                think_mode=think_mode,
+                think_level=think_level,
+            )
             all_adversarial.extend(results)
             print(f"    生成 {len(results)} 条对抗样本")
         except Exception as e:

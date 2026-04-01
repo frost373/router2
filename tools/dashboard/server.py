@@ -6,6 +6,7 @@ FastAPI + SSE 实时推送
 """
 
 import asyncio
+import datetime
 import json
 import os
 import re
@@ -47,6 +48,7 @@ PIPELINE_STEPS = [
     {"key": "Step 5:", "name": "Paraphrase", "index": 4},
     {"key": "Step 5.5", "name": "全局负样本", "index": 5},
     {"key": "Step 6", "name": "合并输出",   "index": 6},
+    {"key": "Step 7", "name": "质量抽查",   "index": 7},
 ]
 
 class TaskState:
@@ -55,18 +57,25 @@ class TaskState:
         self.process: Optional[subprocess.Popen] = None
         self.logs: deque = deque(maxlen=2000)
         self.current_step = -1
-        self.step_statuses = ["waiting"] * 7   # waiting / running / done / skipped
+        self.step_statuses = ["waiting"] * 8   # waiting / running / done / skipped
         self.finished = False
         self.error = False
+        self.stopped = False
         self.subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
         self.lock = threading.Lock()
 
     def reset(self):
         self.logs.clear()
         self.current_step = -1
-        self.step_statuses = ["waiting"] * 7
+        self.step_statuses = ["waiting"] * 8
         self.finished = False
         self.error = False
+        self.stopped = False
+
+    def replace_running_steps(self, next_status: str):
+        for i, status in enumerate(self.step_statuses):
+            if status == "running":
+                self.step_statuses[i] = next_status
 
     def broadcast(self, event: dict):
         """向所有 SSE 订阅者推送事件"""
@@ -192,6 +201,120 @@ def get_output_stats(game: str) -> dict:
     }
 
 
+def load_json_file(filepath: Path):
+    """Load JSON file with a small dashboard-friendly error surface."""
+    if not filepath.exists():
+        return None
+    try:
+        return json.loads(filepath.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"_error": str(e), "_path": str(filepath)}
+
+
+def iso_mtime(filepath: Path) -> str:
+    """Return file mtime as ISO string."""
+    return datetime.datetime.fromtimestamp(
+        filepath.stat().st_mtime,
+        tz=datetime.timezone.utc,
+    ).astimezone().isoformat(timespec="seconds")
+
+
+def summarize_audit_round_file(filepath: Path) -> dict:
+    """Extract the dashboard-facing summary from one audit round artifact."""
+    payload = load_json_file(filepath)
+    if not isinstance(payload, dict):
+        raise ValueError(f"invalid audit round payload: {filepath}")
+
+    audit_result = payload.get("audit_result", {}) if isinstance(payload.get("audit_result"), dict) else {}
+    audit_summary = audit_result.get("audit_summary", {}) if isinstance(audit_result.get("audit_summary"), dict) else {}
+    sample_results = audit_result.get("sample_results", []) if isinstance(audit_result.get("sample_results"), list) else []
+    systemic_findings = audit_result.get("systemic_findings", []) if isinstance(audit_result.get("systemic_findings"), list) else []
+    failed_samples = [
+        result.get("sample_index")
+        for result in sample_results
+        if isinstance(result, dict) and result.get("verdict") in {"fail", "fatal", "borderline"}
+    ]
+
+    return {
+        "round_index": payload.get("round_index"),
+        "file_name": filepath.name,
+        "updated_at": iso_mtime(filepath),
+        "sample_count_actual": payload.get("sample_count_actual", 0),
+        "overall_risk": audit_summary.get("overall_risk", "unknown"),
+        "final_verdict": audit_summary.get("final_verdict", "unknown"),
+        "total_samples": audit_summary.get("total_samples", 0),
+        "pass_count": audit_summary.get("pass_count", 0),
+        "borderline_count": audit_summary.get("borderline_count", 0),
+        "fail_count": audit_summary.get("fail_count", 0),
+        "fatal_count": audit_summary.get("fatal_count", 0),
+        "systemic_findings_count": len(systemic_findings),
+        "problem_sample_indices": failed_samples,
+    }
+
+
+def get_quality_audit_overview(game: str) -> dict:
+    """Read quality audit artifacts for dashboard display."""
+    audit_dir = OUTPUT_DIR / game / "quality_audit"
+    summary_path = audit_dir / "summary.json"
+
+    if not audit_dir.exists():
+        return {
+            "exists": False,
+            "game": game,
+            "output_dir": str(audit_dir),
+            "summary": None,
+            "derived_summary": None,
+            "rounds": [],
+        }
+
+    summary_payload = load_json_file(summary_path) if summary_path.exists() else None
+    round_paths = sorted(audit_dir.glob("audit_round_*.json"))
+    rounds: list[dict] = []
+    round_errors: list[dict] = []
+
+    for path in round_paths:
+        try:
+            rounds.append(summarize_audit_round_file(path))
+        except Exception as e:
+            round_errors.append({"file_name": path.name, "error": str(e)})
+
+    risk_rank = {"unknown": -1, "low": 0, "medium": 1, "high": 2}
+    worst_round = max(rounds, key=lambda item: risk_rank.get(item["overall_risk"], -1), default=None)
+    derived_summary = {
+        "rounds_found": len(rounds),
+        "rounds_completed": len(rounds),
+        "fail_count_total": sum(item["fail_count"] for item in rounds),
+        "borderline_count_total": sum(item["borderline_count"] for item in rounds),
+        "fatal_count_total": sum(item["fatal_count"] for item in rounds),
+        "worst_overall_risk": worst_round["overall_risk"] if worst_round else "unknown",
+        "latest_updated_at": rounds[-1]["updated_at"] if rounds else None,
+    }
+
+    return {
+        "exists": bool(summary_path.exists() or round_paths),
+        "game": game,
+        "output_dir": str(audit_dir),
+        "summary": summary_payload,
+        "summary_file_updated_at": iso_mtime(summary_path) if summary_path.exists() else None,
+        "derived_summary": derived_summary,
+        "rounds": rounds,
+        "round_errors": round_errors,
+    }
+
+
+def get_quality_audit_round(game: str, round_index: int) -> dict:
+    """Read one full audit round artifact."""
+    filepath = OUTPUT_DIR / game / "quality_audit" / f"audit_round_{round_index:02d}.json"
+    payload = load_json_file(filepath)
+    if payload is None:
+        raise FileNotFoundError(filepath.name)
+    if not isinstance(payload, dict):
+        raise ValueError(f"invalid audit round payload: {filepath.name}")
+    payload["file_name"] = filepath.name
+    payload["updated_at"] = iso_mtime(filepath)
+    return payload
+
+
 # ── 生成任务管理 ──────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -205,6 +328,8 @@ class GenerateRequest(BaseModel):
     paraphrase_source: int = 5
     global_neg_rounds: int = 3
     dedup_threshold: float = 0.92
+    audit_sample_count: int = 12
+    audit_rounds: int = 2
     skip_vocab: bool = False
     skip_aliases: bool = False
     skip_global_negatives: bool = False
@@ -222,6 +347,8 @@ def _run_generate(args: GenerateRequest):
         "--paraphrase_source", str(args.paraphrase_source),
         "--global_neg_rounds", str(args.global_neg_rounds),
         "--dedup_threshold", str(args.dedup_threshold),
+        "--audit_sample_count", str(args.audit_sample_count),
+        "--audit_rounds", str(args.audit_rounds),
     ]
     if args.model:
         cmd.extend(["--model", args.model])
@@ -260,6 +387,10 @@ def _run_generate(args: GenerateRequest):
             line = raw_line.rstrip("\n\r")
             task_state.logs.append(line)
 
+            if task_state.stopped:
+                task_state.broadcast({"type": "log", "line": line})
+                continue
+
             # 检测步骤切换
             for step in PIPELINE_STEPS:
                 if step["key"] in line:
@@ -287,11 +418,13 @@ def _run_generate(args: GenerateRequest):
 
         proc.wait()
 
-        if proc.returncode == 0:
+        if task_state.stopped:
+            task_state.replace_running_steps("skipped")
+            task_state.finished = False
+            task_state.error = False
+        elif proc.returncode == 0:
             # 标记所有 running 为 done
-            for i in range(len(task_state.step_statuses)):
-                if task_state.step_statuses[i] == "running":
-                    task_state.step_statuses[i] = "done"
+            task_state.replace_running_steps("done")
             task_state.finished = True
             task_state.broadcast({
                 "type": "done",
@@ -308,8 +441,11 @@ def _run_generate(args: GenerateRequest):
         import traceback
         tb = traceback.format_exc()
         print(f"[_run_generate] 异常: {e}\n{tb}", flush=True)
-        task_state.error = True
-        task_state.broadcast({"type": "error", "message": str(e)})
+        if task_state.stopped:
+            task_state.error = False
+        else:
+            task_state.error = True
+            task_state.broadcast({"type": "error", "message": str(e)})
     finally:
         task_state.running = False
         task_state.process = None
@@ -332,6 +468,8 @@ def api_config():
             "paraphrase_source": 5,
             "global_neg_rounds": 3,
             "dedup_threshold": 0.92,
+            "audit_sample_count": 12,
+            "audit_rounds": 2,
         },
     }
 
@@ -395,6 +533,7 @@ def api_generate_status():
         "step_statuses": list(task_state.step_statuses),
         "finished": task_state.finished,
         "error": task_state.error,
+        "stopped": task_state.stopped,
         "log_count": len(task_state.logs),
     }
 
@@ -405,7 +544,16 @@ def api_generate_stop():
     proc = task_state.process
     if proc and task_state.running:
         try:
+            task_state.stopped = True
+            task_state.finished = False
+            task_state.error = False
+            task_state.replace_running_steps("skipped")
             proc.terminate()
+            task_state.broadcast({
+                "type": "stopped",
+                "message": "Stopped",
+                "statuses": list(task_state.step_statuses),
+            })
             task_state.broadcast({"type": "stopped", "message": "任务已被手动停止"})
             return {"status": "stopped"}
         except Exception as e:
@@ -422,6 +570,23 @@ def api_generate_stop():
 def api_output(game: str):
     """获取输出概览"""
     return get_output_stats(game)
+
+
+@app.get("/api/audit/{game}")
+def api_audit_overview(game: str):
+    """Get quality audit overview."""
+    return get_quality_audit_overview(game)
+
+
+@app.get("/api/audit/{game}/rounds/{round_index}")
+def api_audit_round(game: str, round_index: int):
+    """Get one quality audit round detail."""
+    try:
+        return get_quality_audit_round(game, round_index)
+    except FileNotFoundError:
+        raise HTTPException(404, f"audit_round_{round_index:02d}.json 不存在")
+    except ValueError as e:
+        raise HTTPException(500, str(e))
 
 
 @app.get("/api/output/{game}/{command_id}/{file_type}")

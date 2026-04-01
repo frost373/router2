@@ -50,6 +50,8 @@ def generate_one_round(
     template: str,
     model: str | None = None,
     round_num: int = 1,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> list[dict]:
     """
     执行一轮全局负样本生成。
@@ -68,7 +70,14 @@ def generate_one_round(
     prompt = prompt.replace("{{game_background}}", game_background)
 
     print(f"\n  第 {round_num} 轮: 调用 LLM 生成中...")
-    raw = call_llm(prompt, model=model, temperature=0.9, max_tokens=8192)
+    raw = call_llm(
+        prompt,
+        model=model,
+        temperature=0.9,
+        max_tokens=8192,
+        think_mode=think_mode,
+        think_level=think_level,
+    )
 
     # 清洗 LLM 输出
     text = raw.strip()
@@ -121,6 +130,8 @@ def generate_global_negatives(
     dedup_threshold: float = 0.92,
     sample_plan: dict | None = None,
     game_background: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> list[dict]:
     """
     生成全局负样本。
@@ -167,6 +178,8 @@ def generate_global_negatives(
             batch = generate_one_round(
                 compact_commands, plan, bg, template,
                 model=model, round_num=r,
+                think_mode=think_mode,
+                think_level=think_level,
             )
             all_samples.extend(batch)
             print(f"    [OK] 第 {r} 轮生成 {len(batch)} 条")
@@ -233,6 +246,8 @@ if __name__ == "__main__":
         "--dedup_threshold", type=float, default=0.92,
         help="去重余弦相似度阈值（默认 0.92）",
     )
+    parser.add_argument("--think_mode", action="store_true", help="开启思考模式")
+    parser.add_argument("--think_level", default="high", help="思考等级（low/medium/high）")
     args = parser.parse_args()
 
     generate_global_negatives(
@@ -240,4 +255,6 @@ if __name__ == "__main__":
         model=args.model,
         rounds=args.rounds,
         dedup_threshold=args.dedup_threshold,
+        think_mode=args.think_mode,
+        think_level=args.think_level,
     )

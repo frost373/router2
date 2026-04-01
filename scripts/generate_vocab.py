@@ -29,7 +29,13 @@ def load_commands(game: str) -> dict:
         return json.load(f)
 
 
-def generate_vocab(game: str = "mmorpg", command_id: str | None = None, model: str | None = None) -> dict:
+def generate_vocab(
+    game: str = "mmorpg",
+    command_id: str | None = None,
+    model: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
+) -> dict:
     """
     生成填槽词库
 
@@ -72,7 +78,14 @@ def generate_vocab(game: str = "mmorpg", command_id: str | None = None, model: s
         cmd_json = json.dumps([cmd], ensure_ascii=False, indent=2)
         prompt = template.replace("{{commands_json}}", cmd_json)
 
-        vocab = call_llm_json(prompt, model=model, temperature=0.8)
+        vocab = call_llm_json(
+            prompt,
+            model=model,
+            temperature=0.8,
+            max_tokens=12000,
+            think_mode=think_mode,
+            think_level=think_level,
+        )
 
         # 验证格式
         assert "targets" in vocab, f"{cid} 词库缺少 targets"

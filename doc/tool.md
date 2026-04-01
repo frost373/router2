@@ -127,6 +127,7 @@ Step 3: 模板 × 词库填槽 → 正样本
 Step 4: 正样本最小编辑 → 对抗样本
 Step 5: 正样本自由改写 → paraphrase 样本
 Step 6: 合并输出
+Step 7: 末尾多轮抽样 → 质量抽查
 ```
 
 ### 使用方式
@@ -157,6 +158,8 @@ python scripts/generate_training_data.py --model kimi-k2.5
 | `--template_count` | 40 | 每个 command 生成的模板样本数 |
 | `--adversarial_source` | 10 | 每个 command 选多少正样本生成对抗样本 |
 | `--paraphrase_source` | 5 | 每个 command 选多少正样本做 paraphrase |
+| `--audit_sample_count` | 12 | 单次质量抽查样本数，设为 `0` 可跳过 |
+| `--audit_rounds` | 2 | 质量抽查轮数，设为 `0` 可跳过 |
 
 ### 输出目录
 
@@ -164,6 +167,9 @@ python scripts/generate_training_data.py --model kimi-k2.5
 output/
 └── {game}/                              # 如 mmorpg/
     ├── merged_all.jsonl                 # 全量合并数据
+    ├── quality_audit/                   # 末尾质量抽查结果
+    │   ├── audit_round_01.json          # 单轮抽查明细
+    │   └── summary.json                 # 抽查汇总
     └── {COMMAND_ID}/                    # 如 CAST_ON_TARGET/
         ├── vocab.json                   # 该指令特定的填槽词库
         ├── aliases.json                 # 扩写后的别名模板
@@ -236,6 +242,7 @@ mods:glm-5,kimi-k2.5,mimo-v2-pro,deepseek-v3.2
 | `alias_expand_prompt.txt` | 别名模板扩写 |
 | `adversarial_prompt.txt` | 最小编辑对抗样本 |
 | `paraphrase_prompt.txt` | 自由改写 |
+| `quality_audit_prompt.txt` | 末尾质量抽查 |
 
 ## 3. Commands 压缩器
 
@@ -466,4 +473,3 @@ tools/dashboard/
     ├── style.css      # 深色主题样式
     └── app.js         # 前端逻辑
 ```
-

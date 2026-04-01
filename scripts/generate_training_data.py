@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 训练数据生成器 — 主入口
-串联整个流程：词库生成 → 别名扩写 → 模板样本 → 对抗样本 → paraphrase → 合并
+串联整个流程：词库生成 → 别名扩写 → 模板样本 → 对抗样本 → paraphrase → 合并 → 质量抽查
 """
 
 import argparse
@@ -62,6 +62,14 @@ def parse_args():
     parser.add_argument(
         "--dedup_threshold", type=float, default=0.92,
         help="全局负样本去重余弦相似度阈值（默认 0.92）"
+    )
+    parser.add_argument(
+        "--audit_sample_count", type=int, default=12,
+        help="单次质量抽查样本数（默认 12，设为 0 可跳过）"
+    )
+    parser.add_argument(
+        "--audit_rounds", type=int, default=2,
+        help="质量抽查轮数（默认 2，设为 0 可跳过）"
     )
     return parser.parse_args()
 
@@ -176,20 +184,33 @@ def main():
     print(f"  游戏类型: {args.game}")
     print(f"  目标 command: {args.command_id or '全部'}")
     print(f"  模型: {args.model or '默认 (glm-5)'}")
+    print(f"  思考模式: {'开启' if args.think_mode else '关闭'}")
 
     # Step 1: 词库生成
     if not args.skip_vocab:
         from generate_vocab import generate_vocab
-        generate_vocab(args.game, command_id=args.command_id, model=args.model)
+        generate_vocab(
+            args.game,
+            command_id=args.command_id,
+            model=args.model,
+            think_mode=args.think_mode,
+            think_level=args.think_level,
+        )
     else:
-        print("\n  [SKIP] 跳过词库生成（使用已有词库）")
+        print("\n  [SKIP] Step 1: 跳过词库生成（使用已有词库）")
 
     # Step 2: 别名扩写
     if not args.skip_aliases:
         from expand_aliases import expand_aliases
-        expand_aliases(args.game, command_id=args.command_id, model=args.model)
+        expand_aliases(
+            args.game,
+            command_id=args.command_id,
+            model=args.model,
+            think_mode=args.think_mode,
+            think_level=args.think_level,
+        )
     else:
-        print("\n  [SKIP] 跳过别名扩写（使用已有扩写结果）")
+        print("\n  [SKIP] Step 2: 跳过别名扩写（使用已有扩写结果）")
 
     # Step 3: 模板样本
     from generate_template_samples import generate_template_samples
@@ -206,6 +227,8 @@ def main():
         command_id=args.command_id,
         max_source_per_command=args.adversarial_source,
         model=args.model,
+        think_mode=args.think_mode,
+        think_level=args.think_level,
     )
 
     # Step 5: paraphrase
@@ -215,6 +238,8 @@ def main():
         command_id=args.command_id,
         max_source_per_command=args.paraphrase_source,
         model=args.model,
+        think_mode=args.think_mode,
+        think_level=args.think_level,
     )
 
     # Step 5.5: 全局负样本
@@ -225,12 +250,29 @@ def main():
             model=args.model,
             rounds=args.global_neg_rounds,
             dedup_threshold=args.dedup_threshold,
+            think_mode=args.think_mode,
+            think_level=args.think_level,
         )
     else:
-        print("\n  [SKIP] 跳过全局负样本生成（使用已有结果）")
+        print("\n  [SKIP] Step 5.5: 跳过全局负样本生成（使用已有结果）")
 
     # Step 6: 合并
-    merge_outputs(args.game, command_id=args.command_id)
+    merged_samples = merge_outputs(args.game, command_id=args.command_id)
+
+    # Step 7: 质量抽查
+    try:
+        from audit_training_data import run_quality_audit
+        run_quality_audit(
+            game=args.game,
+            samples=merged_samples,
+            model=args.model,
+            sample_count=args.audit_sample_count,
+            rounds=args.audit_rounds,
+            think_mode=args.think_mode,
+            think_level=args.think_level,
+        )
+    except Exception as e:
+        print(f"\n  [WARN] 质量抽查失败: {e}")
 
     print(f"\n{'='*60}")
     print(f"  [OK] 全部完成！")

@@ -84,6 +84,14 @@
                         <input type="number" id="cfg-rounds" class="form-control" value="3" min="1" max="20">
                     </div>
                     <div class="form-group">
+                        <label>单次抽查数量</label>
+                        <input type="number" id="cfg-audit-sample-count" class="form-control" value="12" min="0" max="100">
+                    </div>
+                    <div class="form-group">
+                        <label>抽查次数</label>
+                        <input type="number" id="cfg-audit-rounds" class="form-control" value="2" min="0" max="20">
+                    </div>
+                    <div class="form-group">
                         <label>去重阈值 <span class="threshold-value" id="threshold-display">0.92</span></label>
                         <input type="range" id="cfg-threshold" class="form-range" min="0.80" max="0.99" step="0.01" value="0.92">
                     </div>
@@ -161,54 +169,98 @@
                                 <div class="step-indicator"><span class="step-icon">⏳</span></div>
                                 <div class="step-label">合并输出</div>
                             </div>
-                        </div>
-                    </div>
-
-                    <!-- 统计卡片 -->
-                    <div class="stats-section hidden" id="stats-section">
-                        <h3>📊 生成统计</h3>
-                        <div class="stats-grid">
-                            <div class="stat-card stat-total">
-                                <div class="stat-value" id="stat-total">0</div>
-                                <div class="stat-label">总样本数</div>
-                            </div>
-                            <div class="stat-card stat-qc">
-                                <div class="stat-value" id="stat-qc">0</div>
-                                <div class="stat-label">quick_command</div>
-                            </div>
-                            <div class="stat-card stat-tac">
-                                <div class="stat-value" id="stat-tactical">0</div>
-                                <div class="stat-label">tactical</div>
-                            </div>
-                            <div class="stat-card stat-chat">
-                                <div class="stat-value" id="stat-chat">0</div>
-                                <div class="stat-label">chat</div>
-                            </div>
-                        </div>
-                        <div class="charts-row">
-                            <div class="chart-container">
-                                <h4>Label 分布</h4>
-                                <canvas id="chart-labels" width="240" height="240"></canvas>
-                            </div>
-                            <div class="chart-container">
-                                <h4>Source Type 分布</h4>
-                                <canvas id="chart-sources" width="360" height="240"></canvas>
+                            <div class="pipe-connector"></div>
+                            <div class="pipe-step" data-step="7">
+                                <div class="step-indicator"><span class="step-icon">⏳</span></div>
+                                <div class="step-label">质量抽查</div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- 日志窗口（左右双栏） -->
-                    <div class="log-section">
-                        <div class="log-header">
-                            <h3>📝 生成日志 <span class="log-count" id="log-count">0</span></h3>
-                            <h3>🤖 LLM 交互 <span class="log-count" id="llm-log-count">0</span></h3>
-                        </div>
-                        <div class="log-split-view">
-                            <div class="log-window" id="log-window">
-                                <div class="log-placeholder">等待生成任务启动...</div>
+                    <div class="progress-subtabs">
+                        <button class="progress-subtab" data-progress-tab="stats" id="progress-tab-stats">📊 生成统计</button>
+                        <button class="progress-subtab" data-progress-tab="audit" id="progress-tab-audit">🧪 质量抽查</button>
+                        <button class="progress-subtab active" data-progress-tab="log" id="progress-tab-log">📝 生成日志</button>
+                    </div>
+
+                    <div class="progress-panel" id="progress-panel-stats">
+                        <!-- 统计卡片 -->
+                        <div class="stats-section hidden" id="stats-section">
+                            <h3>📊 生成统计</h3>
+                            <div class="stats-grid">
+                                <div class="stat-card stat-total">
+                                    <div class="stat-value" id="stat-total">0</div>
+                                    <div class="stat-label">总样本数</div>
+                                </div>
+                                <div class="stat-card stat-qc">
+                                    <div class="stat-value" id="stat-qc">0</div>
+                                    <div class="stat-label">quick_command</div>
+                                </div>
+                                <div class="stat-card stat-tac">
+                                    <div class="stat-value" id="stat-tactical">0</div>
+                                    <div class="stat-label">tactical</div>
+                                </div>
+                                <div class="stat-card stat-chat">
+                                    <div class="stat-value" id="stat-chat">0</div>
+                                    <div class="stat-label">chat</div>
+                                </div>
                             </div>
-                            <div class="log-window" id="llm-log-window">
-                                <div class="log-placeholder">等待 LLM 调用...</div>
+                            <div class="charts-row">
+                                <div class="chart-container">
+                                    <h4>Label 分布</h4>
+                                    <canvas id="chart-labels" width="240" height="240"></canvas>
+                                </div>
+                                <div class="chart-container">
+                                    <h4>Source Type 分布</h4>
+                                    <canvas id="chart-sources" width="360" height="240"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="progress-panel" id="progress-panel-audit">
+                        <!-- 质量抽查 -->
+                        <div class="audit-section hidden" id="audit-section">
+                            <div class="section-header">
+                                <h3>🧪 质量抽查</h3>
+                                <button class="btn btn-sm btn-outline" id="btn-refresh-audit" type="button">刷新</button>
+                            </div>
+                            <div class="audit-summary-grid">
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">状态</div>
+                                    <div class="audit-stat-value" id="audit-status-value">-</div>
+                                </div>
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">完成轮次</div>
+                                    <div class="audit-stat-value mono" id="audit-rounds-value">0/0</div>
+                                </div>
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">最高风险</div>
+                                    <div class="audit-stat-value" id="audit-risk-value">-</div>
+                                </div>
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">Fail / Borderline</div>
+                                    <div class="audit-stat-value mono" id="audit-fail-value">0 / 0</div>
+                                </div>
+                            </div>
+                            <div class="audit-meta" id="audit-meta"></div>
+                            <div class="audit-rounds" id="audit-rounds"></div>
+                        </div>
+                    </div>
+
+                    <div class="progress-panel active" id="progress-panel-log">
+                        <div class="log-section">
+                            <div class="log-header">
+                                <h3>📝 生成日志 <span class="log-count" id="log-count">0</span></h3>
+                                <h3>🤖 LLM 交互 <span class="log-count" id="llm-log-count">0</span></h3>
+                            </div>
+                            <div class="log-split-view">
+                                <div class="log-window" id="log-window">
+                                    <div class="log-placeholder">等待生成任务启动...</div>
+                                </div>
+                                <div class="log-window" id="llm-log-window">
+                                    <div class="log-placeholder">等待 LLM 调用...</div>
+                                </div>
                             </div>
                         </div>
                     </div>

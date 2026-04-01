@@ -30,6 +30,8 @@ def paraphrase_batch(
     samples: list[dict],
     template: str,
     model: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> list[dict]:
     """
     对一批样本做 paraphrase
@@ -44,7 +46,14 @@ def paraphrase_batch(
     input_json = json.dumps(input_items, ensure_ascii=False, indent=2)
     prompt = template.replace("{{samples}}", input_json)
 
-    result = call_llm_json(prompt, model=model, temperature=0.9, max_tokens=8192)
+    result = call_llm_json(
+        prompt,
+        model=model,
+        temperature=0.9,
+        max_tokens=8192,
+        think_mode=think_mode,
+        think_level=think_level,
+    )
 
     paraphrased = []
     for item in result:
@@ -89,6 +98,8 @@ def generate_paraphrase_samples(
     command_id: str | None = None,
     max_source_per_command: int = 5,
     model: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> list[dict]:
     """
     生成自由 paraphrase 样本
@@ -152,7 +163,13 @@ def generate_paraphrase_samples(
         print(f"\n  批次 {batch_num}/{total_batches} ({len(batch)} 条)...")
 
         try:
-            results = paraphrase_batch(batch, template, model=model)
+            results = paraphrase_batch(
+                batch,
+                template,
+                model=model,
+                think_mode=think_mode,
+                think_level=think_level,
+            )
             all_paraphrased.extend(results)
             print(f"    生成 {len(results)} 条改写样本")
         except Exception as e:

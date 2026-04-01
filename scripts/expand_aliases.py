@@ -31,7 +31,11 @@ def load_commands(game: str) -> list[dict]:
 
 
 def expand_aliases_for_command(
-    cmd: dict, template: str, model: str | None = None
+    cmd: dict,
+    template: str,
+    model: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> list[str]:
     """
     对单个 command 扩写别名
@@ -48,7 +52,14 @@ def expand_aliases_for_command(
         "{{aliases}}", json.dumps(cmd["aliases"], ensure_ascii=False)
     )
 
-    result = call_llm_json(prompt, model=model, temperature=0.8)
+    result = call_llm_json(
+        prompt,
+        model=model,
+        temperature=0.8,
+        max_tokens=12000,
+        think_mode=think_mode,
+        think_level=think_level,
+    )
 
     new_aliases = result.get("new_aliases", [])
 
@@ -63,6 +74,8 @@ def expand_aliases(
     game: str = "mmorpg",
     command_id: str | None = None,
     model: str | None = None,
+    think_mode: bool = False,
+    think_level: str = "high",
 ) -> dict:
     """
     对 commands 进行别名扩写
@@ -93,7 +106,13 @@ def expand_aliases(
         cid = cmd["command_id"]
         print(f"\n  扩写 {cid}...")
 
-        new_aliases = expand_aliases_for_command(cmd, template, model=model)
+        new_aliases = expand_aliases_for_command(
+            cmd,
+            template,
+            model=model,
+            think_mode=think_mode,
+            think_level=think_level,
+        )
 
         all_aliases = cmd["aliases"] + new_aliases
         result[cid] = {

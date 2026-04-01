@@ -422,11 +422,56 @@ body {
 }
 .tab-content.active { display: flex; flex-direction: column; gap: var(--space-lg); }
 
+.progress-subtabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+    padding: var(--space-sm);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+}
+
+.progress-subtab {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.progress-subtab:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.progress-subtab.active {
+    color: var(--accent-blue);
+    background: rgba(59, 130, 246, 0.1);
+    border-color: rgba(59, 130, 246, 0.22);
+}
+
+.progress-panel {
+    display: none;
+}
+
+.progress-panel.active {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+    min-height: 0;
+}
+
 /* ══════════════════════════════════════════════
    Pipeline 步骤条
    ══════════════════════════════════════════════ */
 
-.pipeline-section h3, .log-section h3, .stats-section h3 {
+.pipeline-section h3, .log-section h3, .stats-section h3, .audit-section h3 {
     font-size: 15px;
     font-weight: 600;
     margin-bottom: var(--space-md);
@@ -573,6 +618,219 @@ body {
    日志窗口
    ══════════════════════════════════════════════ */
 
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-md);
+    margin-bottom: var(--space-md);
+}
+
+.audit-section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-lg);
+}
+
+.audit-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-md);
+}
+
+.audit-stat-card,
+.audit-detail-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+}
+
+.audit-stat-label,
+.audit-detail-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: var(--space-xs);
+}
+
+.audit-stat-value,
+.audit-detail-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.mono {
+    font-family: var(--font-mono);
+}
+
+.audit-meta,
+.audit-modal-meta {
+    margin-top: var(--space-md);
+    color: var(--text-secondary);
+    font-size: 12px;
+    word-break: break-all;
+}
+
+.audit-rounds {
+    margin-top: var(--space-md);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--space-md);
+}
+
+.audit-round-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.audit-round-card:hover {
+    border-color: var(--accent-blue);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-glow-blue);
+}
+
+.audit-round-top,
+.audit-finding-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    margin-bottom: var(--space-sm);
+}
+
+.audit-round-title {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.audit-round-badges {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.audit-round-stats {
+    display: flex;
+    gap: var(--space-md);
+    flex-wrap: wrap;
+    color: var(--text-secondary);
+    font-size: 12px;
+    margin-bottom: var(--space-sm);
+}
+
+.audit-round-meta {
+    color: var(--text-tertiary);
+    font-size: 12px;
+}
+
+.audit-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 70px;
+    padding: 2px 10px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.risk-high,
+.verdict-needs-fix,
+.verdict-fail,
+.verdict-fatal {
+    background: rgba(239, 68, 68, 0.16);
+    color: var(--accent-red);
+}
+
+.risk-medium,
+.verdict-borderline,
+.verdict-partial {
+    background: rgba(234, 179, 8, 0.16);
+    color: var(--accent-yellow);
+}
+
+.risk-low,
+.verdict-pass,
+.verdict-completed,
+.verdict-available {
+    background: rgba(34, 197, 94, 0.16);
+    color: var(--accent-green);
+}
+
+.risk-unknown,
+.verdict-unknown,
+.verdict-none,
+.verdict-skipped {
+    background: rgba(139, 148, 158, 0.16);
+    color: var(--text-secondary);
+}
+
+.audit-placeholder,
+.audit-empty-inline {
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-lg);
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.audit-modal-section {
+    margin-bottom: var(--space-lg);
+}
+
+.audit-modal-section h4 {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-sm);
+}
+
+.audit-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--space-md);
+    margin-top: var(--space-md);
+}
+
+.audit-findings {
+    display: grid;
+    gap: var(--space-md);
+}
+
+.audit-finding {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+}
+
+.audit-finding p {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: var(--space-xs);
+}
+
+.audit-finding-fix {
+    color: var(--text-primary);
+}
+
+.audit-sample-table td:nth-child(5),
+.audit-sample-table td:nth-child(6) {
+    min-width: 220px;
+}
+
 .log-section { flex: 1; display: flex; flex-direction: column; min-height: 200px; }
 
 .log-header {
@@ -629,6 +887,12 @@ body {
     white-space: pre-wrap;
     word-break: break-all;
     padding: 1px 0;
+}
+.llm-log-stream {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font: inherit;
 }
 .log-line.step-line {
     color: var(--accent-blue);
@@ -976,4 +1240,6 @@ body {
     }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     .charts-row { flex-direction: column; }
+    .audit-summary-grid { grid-template-columns: repeat(2, 1fr); }
+    .audit-detail-grid { grid-template-columns: repeat(2, 1fr); }
 }
