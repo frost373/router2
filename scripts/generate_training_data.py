@@ -22,7 +22,11 @@ def parse_args():
         "--game", default="mmorpg", help="游戏类型（对应 commands/ 下的 JSON 文件名）"
     )
     parser.add_argument(
-        "--command_id", default=None, help="只处理指定的 command_id（用于测试）"
+        "--command_id",
+        dest="command_ids",
+        action="append",
+        default=[],
+        help="可重复指定 command_id；不传表示处理全部 command"
     )
     parser.add_argument(
         "--model", default=None, help="LLM 模型名称（默认 glm-5）"
@@ -74,7 +78,48 @@ def parse_args():
     return parser.parse_args()
 
 
-def merge_outputs(game: str, command_id: str | None = None):
+def load_registry_command_ids(game: str) -> list[str]:
+    path = os.path.join(PROJECT_DIR, "commands", f"{game}.json")
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    commands = data.get("commands", data)
+    return [cmd["command_id"] for cmd in commands]
+
+
+def normalize_command_selection(game: str, command_ids: list[str]) -> list[str] | None:
+    selected: list[str] = []
+    seen: set[str] = set()
+
+    for command_id in command_ids:
+        cid = command_id.strip()
+        if not cid or cid in seen:
+            continue
+        selected.append(cid)
+        seen.add(cid)
+
+    if not selected:
+        return None
+
+    available = set(load_registry_command_ids(game))
+    missing = [cid for cid in selected if cid not in available]
+    if missing:
+        raise ValueError(f"未找到 command_id: {', '.join(missing)}")
+
+    return selected
+
+
+def iter_selected_commands(command_ids: list[str] | None) -> list[str | None]:
+    return command_ids if command_ids else [None]
+
+
+def format_command_scope(command_ids: list[str] | None) -> str:
+    if not command_ids:
+        return "全部"
+    return ", ".join(command_ids)
+
+
+def merge_outputs(game: str, command_ids: list[str] | None = None):
     """合并所有输出到最终 JSONL"""
     print(f"\n{'='*60}")
     print(f"  Step 6: 合并输出")
@@ -101,8 +146,8 @@ def merge_outputs(game: str, command_id: str | None = None):
         print(f"  全局负样本: {len(global_neg_samples)} 条")
 
     # 确定要合并哪些 command 目录
-    if command_id:
-        cmd_dirs = [command_id]
+    if command_ids:
+        cmd_dirs = command_ids
     else:
         cmd_dirs = [
             d for d in os.listdir(game_dir)
@@ -175,72 +220,86 @@ def merge_outputs(game: str, command_id: str | None = None):
     return all_samples
 
 
+def clone_with_source_type(samples: list[dict], source_type: str) -> list[dict]:
+    """Return shallow copies tagged with the source type for current-run audit."""
+    return [{**sample, "source_type": source_type} for sample in samples]
+
+
 def main():
     args = parse_args()
+    selected_command_ids = normalize_command_selection(args.game, args.command_ids)
 
     print("=" * 60)
     print("  训练数据生成器 — 模板主导 + 扰动扩写")
     print("=" * 60)
     print(f"  游戏类型: {args.game}")
-    print(f"  目标 command: {args.command_id or '全部'}")
+    print(f"  目标 command: {format_command_scope(selected_command_ids)}")
     print(f"  模型: {args.model or '默认 (glm-5)'}")
     print(f"  思考模式: {'开启' if args.think_mode else '关闭'}")
 
     # Step 1: 词库生成
     if not args.skip_vocab:
         from generate_vocab import generate_vocab
-        generate_vocab(
-            args.game,
-            command_id=args.command_id,
-            model=args.model,
-            think_mode=args.think_mode,
-            think_level=args.think_level,
-        )
+        for command_id in iter_selected_commands(selected_command_ids):
+            generate_vocab(
+                args.game,
+                command_id=command_id,
+                model=args.model,
+                think_mode=args.think_mode,
+                think_level=args.think_level,
+            )
     else:
         print("\n  [SKIP] Step 1: 跳过词库生成（使用已有词库）")
 
     # Step 2: 别名扩写
     if not args.skip_aliases:
         from expand_aliases import expand_aliases
-        expand_aliases(
-            args.game,
-            command_id=args.command_id,
-            model=args.model,
-            think_mode=args.think_mode,
-            think_level=args.think_level,
-        )
+        for command_id in iter_selected_commands(selected_command_ids):
+            expand_aliases(
+                args.game,
+                command_id=command_id,
+                model=args.model,
+                think_mode=args.think_mode,
+                think_level=args.think_level,
+            )
     else:
         print("\n  [SKIP] Step 2: 跳过别名扩写（使用已有扩写结果）")
 
     # Step 3: 模板样本
     from generate_template_samples import generate_template_samples
-    generate_template_samples(
-        args.game,
-        command_id=args.command_id,
-        samples_per_command=args.template_count,
-    )
+    template_samples = []
+    for command_id in iter_selected_commands(selected_command_ids):
+        template_samples.extend(generate_template_samples(
+            args.game,
+            command_id=command_id,
+            samples_per_command=args.template_count,
+        ))
 
     # Step 4: 对抗样本
     from generate_adversarial_samples import generate_adversarial_samples
-    generate_adversarial_samples(
-        args.game,
-        command_id=args.command_id,
-        max_source_per_command=args.adversarial_source,
-        model=args.model,
-        think_mode=args.think_mode,
-        think_level=args.think_level,
-    )
+    adversarial_samples = []
+    for command_id in iter_selected_commands(selected_command_ids):
+        adversarial_samples.extend(generate_adversarial_samples(
+            args.game,
+            command_id=command_id,
+            max_source_per_command=args.adversarial_source,
+            model=args.model,
+            think_mode=args.think_mode,
+            think_level=args.think_level,
+        ))
 
     # Step 5: paraphrase
     from generate_paraphrase_samples import generate_paraphrase_samples
-    generate_paraphrase_samples(
-        args.game,
-        command_id=args.command_id,
-        max_source_per_command=args.paraphrase_source,
-        model=args.model,
-        think_mode=args.think_mode,
-        think_level=args.think_level,
-    )
+    paraphrase_samples = []
+    for command_id in iter_selected_commands(selected_command_ids):
+        paraphrase_samples.extend(generate_paraphrase_samples(
+            args.game,
+            command_id=command_id,
+            max_source_per_command=args.paraphrase_source,
+            model=args.model,
+            think_mode=args.think_mode,
+            think_level=args.think_level,
+        ))
 
     # Step 5.5: 全局负样本
     if not args.skip_global_negatives:
@@ -257,17 +316,31 @@ def main():
         print("\n  [SKIP] Step 5.5: 跳过全局负样本生成（使用已有结果）")
 
     # Step 6: 合并
-    merged_samples = merge_outputs(args.game, command_id=args.command_id)
+    merge_outputs(args.game, command_ids=selected_command_ids)
+
+    current_run_samples = []
+    current_run_samples.extend(clone_with_source_type(template_samples, "template"))
+    current_run_samples.extend(clone_with_source_type(adversarial_samples, "adversarial"))
+    current_run_samples.extend(clone_with_source_type(paraphrase_samples, "paraphrase"))
 
     # Step 7: 质量抽查
     try:
         from audit_training_data import run_quality_audit
         run_quality_audit(
             game=args.game,
-            samples=merged_samples,
+            samples=current_run_samples,
             model=args.model,
             sample_count=args.audit_sample_count,
             rounds=args.audit_rounds,
+            input_path=(
+                f"current_run/{args.game}/{selected_command_ids[0]}"
+                if selected_command_ids and len(selected_command_ids) == 1
+                else (
+                    f"current_run/{args.game}/selected_commands"
+                    if selected_command_ids
+                    else f"current_run/{args.game}/all_commands"
+                )
+            ),
             think_mode=args.think_mode,
             think_level=args.think_level,
         )

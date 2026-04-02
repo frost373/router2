@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 # ── 路径常量 ────────────────────────────────────────────
@@ -32,6 +32,7 @@ SCRIPTS_DIR = PROJECT_DIR / "scripts"
 COMMANDS_DIR = PROJECT_DIR / "commands"
 OUTPUT_DIR = PROJECT_DIR / "output"
 LLM_CONFIG = PROJECT_DIR / "LLM.txt"
+LLM_LOG_PATH = PROJECT_DIR / "logs" / "llm_interaction.log"
 
 # ── FastAPI 应用 ────────────────────────────────────────
 app = FastAPI(title="训练数据生成器 Dashboard")
@@ -39,43 +40,141 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # ── 生成任务状态 ─────────────────────────────────────────
 
-# 步骤定义（关键字 → 显示名 + 索引）
-PIPELINE_STEPS = [
-    {"key": "Step 1", "name": "词库生成",   "index": 0},
-    {"key": "Step 2", "name": "别名扩写",   "index": 1},
-    {"key": "Step 3", "name": "模板填槽",   "index": 2},
-    {"key": "Step 4", "name": "对抗样本",   "index": 3},
-    {"key": "Step 5:", "name": "Paraphrase", "index": 4},
-    {"key": "Step 5.5", "name": "全局负样本", "index": 5},
-    {"key": "Step 6", "name": "合并输出",   "index": 6},
-    {"key": "Step 7", "name": "质量抽查",   "index": 7},
+# 步骤定义（关键字 → 显示名）
+MAIN_PIPELINE_STEPS = [
+    {"key": "Step 1", "name": "词库生成"},
+    {"key": "Step 2", "name": "别名扩写"},
+    {"key": "Step 3", "name": "模板填槽"},
+    {"key": "Step 4", "name": "对抗样本"},
+    {"key": "Step 5:", "name": "Paraphrase"},
+    {"key": "Step 6", "name": "合并输出"},
+    {"key": "Step 7", "name": "质量抽查"},
 ]
+
+GLOBAL_NEGATIVE_STEPS = [
+    {"name": "全局负样本生成"},
+]
+QUALITY_AUDIT_STEPS = [
+    {"name": "璐ㄩ噺鎶芥煡"},
+]
+
+
+def normalize_steps(steps: list[dict]) -> list[dict]:
+    """Normalize step definitions to dashboard-friendly shape."""
+    return [
+        {
+            "index": idx,
+            "name": step["name"],
+            "key": step.get("key"),
+        }
+        for idx, step in enumerate(steps)
+    ]
+
+
+def get_llm_log_size() -> int:
+    try:
+        return LLM_LOG_PATH.stat().st_size if LLM_LOG_PATH.exists() else 0
+    except OSError:
+        return 0
+
+
+def read_llm_log_chunk(from_pos: int = 0) -> tuple[str, int]:
+    if from_pos < 0:
+        from_pos = 0
+    if not LLM_LOG_PATH.exists():
+        return "", 0
+
+    try:
+        with open(LLM_LOG_PATH, "r", encoding="utf-8") as f:
+            f.seek(from_pos)
+            new_content = f.read()
+            end_pos = f.tell()
+        return new_content, end_pos
+    except Exception:
+        return "", from_pos
 
 class TaskState:
     def __init__(self):
         self.running = False
         self.process: Optional[subprocess.Popen] = None
         self.logs: deque = deque(maxlen=2000)
+        self.task_type = "main_pipeline"
+        self.task_name = "主流程"
+        self.steps = normalize_steps(MAIN_PIPELINE_STEPS)
         self.current_step = -1
-        self.step_statuses = ["waiting"] * 8   # waiting / running / done / skipped
+        self.step_statuses = ["waiting"] * len(self.steps)   # waiting / running / done / skipped
         self.finished = False
         self.error = False
         self.stopped = False
+        self.llm_log_offset = get_llm_log_size()
         self.subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
         self.lock = threading.Lock()
 
-    def reset(self):
+    def reset(self, task_type: str, task_name: str, steps: list[dict]):
         self.logs.clear()
+        self.task_type = task_type
+        self.task_name = task_name
+        self.steps = normalize_steps(steps)
         self.current_step = -1
-        self.step_statuses = ["waiting"] * 8
+        self.step_statuses = ["waiting"] * len(self.steps)
         self.finished = False
         self.error = False
         self.stopped = False
+        self.llm_log_offset = get_llm_log_size()
+
+    def get_steps_payload(self) -> list[dict]:
+        return [
+            {
+                "index": step["index"],
+                "name": step["name"],
+            }
+            for step in self.steps
+        ]
+
+    def snapshot(self) -> dict:
+        return {
+            "task_type": self.task_type,
+            "task_name": self.task_name,
+            "steps": self.get_steps_payload(),
+            "running": self.running,
+            "current_step": self.current_step,
+            "step_statuses": list(self.step_statuses),
+            "statuses": list(self.step_statuses),
+            "finished": self.finished,
+            "error": self.error,
+            "stopped": self.stopped,
+            "log_count": len(self.logs),
+            "llm_log_offset": self.llm_log_offset,
+        }
+
+    def make_event(self, payload: dict) -> dict:
+        event = dict(payload)
+        event.setdefault("task_type", self.task_type)
+        event.setdefault("task_name", self.task_name)
+        event.setdefault("steps", self.get_steps_payload())
+        event.setdefault("current_step", self.current_step)
+        event.setdefault("statuses", list(self.step_statuses))
+        event.setdefault("llm_log_offset", self.llm_log_offset)
+        return event
 
     def replace_running_steps(self, next_status: str):
         for i, status in enumerate(self.step_statuses):
             if status == "running":
                 self.step_statuses[i] = next_status
+
+    def mark_step(self, idx: int, status: str):
+        if idx < 0 or idx >= len(self.step_statuses):
+            return
+        for i in range(idx):
+            if self.step_statuses[i] == "running":
+                self.step_statuses[i] = "done"
+        self.step_statuses[idx] = status
+        self.current_step = idx
+
+    def start_single_step_task(self):
+        if self.step_statuses:
+            self.current_step = 0
+            self.step_statuses[0] = "running"
 
     def broadcast(self, event: dict):
         """向所有 SSE 订阅者推送事件"""
@@ -321,22 +420,55 @@ class GenerateRequest(BaseModel):
     game: str = "mmorpg"
     model: Optional[str] = None
     command_id: Optional[str] = None
+    command_ids: list[str] = Field(default_factory=list)
     think_mode: bool = False
     think_level: str = "high"
     template_count: int = 40
     adversarial_source: int = 10
     paraphrase_source: int = 5
-    global_neg_rounds: int = 3
-    dedup_threshold: float = 0.92
     audit_sample_count: int = 12
     audit_rounds: int = 2
     skip_vocab: bool = False
     skip_aliases: bool = False
-    skip_global_negatives: bool = False
 
 
-def _run_generate(args: GenerateRequest):
-    """在后台线程中运行生成脚本"""
+class GlobalNegativeRequest(BaseModel):
+    game: str = "mmorpg"
+    model: Optional[str] = None
+    think_mode: bool = False
+    think_level: str = "high"
+    rounds: int = 3
+    dedup_threshold: float = 0.92
+
+
+class QualityAuditRequest(BaseModel):
+    game: str = "mmorpg"
+    model: Optional[str] = None
+    think_mode: bool = False
+    think_level: str = "high"
+    sample_count: int = 12
+    rounds: int = 2
+
+
+def get_selected_command_ids(args: GenerateRequest) -> list[str]:
+    selected: list[str] = []
+
+    if args.command_id:
+        selected.append(args.command_id)
+    selected.extend(args.command_ids)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for command_id in selected:
+        if not command_id or command_id in seen:
+            continue
+        deduped.append(command_id)
+        seen.add(command_id)
+
+    return deduped
+
+
+def build_main_pipeline_command(args: GenerateRequest) -> list[str]:
     cmd = [
         sys.executable,
         "-u",
@@ -345,15 +477,14 @@ def _run_generate(args: GenerateRequest):
         "--template_count", str(args.template_count),
         "--adversarial_source", str(args.adversarial_source),
         "--paraphrase_source", str(args.paraphrase_source),
-        "--global_neg_rounds", str(args.global_neg_rounds),
-        "--dedup_threshold", str(args.dedup_threshold),
         "--audit_sample_count", str(args.audit_sample_count),
         "--audit_rounds", str(args.audit_rounds),
+        "--skip_global_negatives",
     ]
     if args.model:
         cmd.extend(["--model", args.model])
-    if args.command_id:
-        cmd.extend(["--command_id", args.command_id])
+    for command_id in get_selected_command_ids(args):
+        cmd.extend(["--command_id", command_id])
     if args.think_mode:
         cmd.append("--think_mode")
         cmd.extend(["--think_level", args.think_level])
@@ -361,13 +492,67 @@ def _run_generate(args: GenerateRequest):
         cmd.append("--skip_vocab")
     if args.skip_aliases:
         cmd.append("--skip_aliases")
-    if args.skip_global_negatives:
-        cmd.append("--skip_global_negatives")
+    return cmd
+
+
+def build_global_negative_command(args: GlobalNegativeRequest) -> list[str]:
+    cmd = [
+        sys.executable,
+        "-u",
+        str(SCRIPTS_DIR / "generate_global_negatives.py"),
+        "--game", args.game,
+        "--rounds", str(args.rounds),
+        "--dedup_threshold", str(args.dedup_threshold),
+    ]
+    if args.model:
+        cmd.extend(["--model", args.model])
+    if args.think_mode:
+        cmd.append("--think_mode")
+        cmd.extend(["--think_level", args.think_level])
+    return cmd
+
+
+def build_quality_audit_command(args: QualityAuditRequest) -> list[str]:
+    cmd = [
+        sys.executable,
+        "-u",
+        str(SCRIPTS_DIR / "audit_training_data.py"),
+        "--game", args.game,
+        "--sample_count", str(args.sample_count),
+        "--rounds", str(args.rounds),
+    ]
+    if args.model:
+        cmd.extend(["--model", args.model])
+    if args.think_mode:
+        cmd.append("--think_mode")
+        cmd.extend(["--think_level", args.think_level])
+    return cmd
+
+
+def run_task(
+    cmd: list[str],
+    *,
+    task_type: str,
+    task_name: str,
+    steps: list[dict],
+    auto_start_first_step: bool = False,
+):
+    """在后台线程中运行 dashboard 任务。"""
 
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
 
     try:
+        task_state.reset(task_type, task_name, steps)
+        task_state.broadcast(task_state.make_event({"type": "reset"}))
+        if auto_start_first_step:
+            task_state.start_single_step_task()
+            task_state.broadcast(task_state.make_event({
+                "type": "step",
+                "step": task_state.current_step,
+                "status": task_state.step_statuses[task_state.current_step],
+            }))
+
         # CREATE_NEW_PROCESS_GROUP 避免子进程 Ctrl+C 信号影响父进程
         proc = subprocess.Popen(
             cmd,
@@ -388,33 +573,25 @@ def _run_generate(args: GenerateRequest):
             task_state.logs.append(line)
 
             if task_state.stopped:
-                task_state.broadcast({"type": "log", "line": line})
+                task_state.broadcast(task_state.make_event({"type": "log", "line": line}))
                 continue
 
             # 检测步骤切换
-            for step in PIPELINE_STEPS:
-                if step["key"] in line:
+            for step in task_state.steps:
+                step_key = step.get("key")
+                if step_key and step_key in line:
                     idx = step["index"]
-                    # 把之前 running 的标记为 done
-                    for i in range(idx):
-                        if task_state.step_statuses[i] == "running":
-                            task_state.step_statuses[i] = "done"
-                    # 检测跳过
-                    if "跳过" in line or "[SKIP]" in line:
-                        task_state.step_statuses[idx] = "skipped"
-                    else:
-                        task_state.step_statuses[idx] = "running"
-                    task_state.current_step = idx
-                    task_state.broadcast({
+                    status = "skipped" if ("跳过" in line or "[SKIP]" in line) else "running"
+                    task_state.mark_step(idx, status)
+                    task_state.broadcast(task_state.make_event({
                         "type": "step",
                         "step": idx,
                         "status": task_state.step_statuses[idx],
-                        "statuses": list(task_state.step_statuses),
-                    })
+                    }))
                     break
 
             # 推送日志行
-            task_state.broadcast({"type": "log", "line": line})
+            task_state.broadcast(task_state.make_event({"type": "log", "line": line}))
 
         proc.wait()
 
@@ -426,26 +603,25 @@ def _run_generate(args: GenerateRequest):
             # 标记所有 running 为 done
             task_state.replace_running_steps("done")
             task_state.finished = True
-            task_state.broadcast({
+            task_state.broadcast(task_state.make_event({
                 "type": "done",
-                "statuses": list(task_state.step_statuses),
-            })
+            }))
         else:
             task_state.error = True
-            task_state.broadcast({
+            task_state.broadcast(task_state.make_event({
                 "type": "error",
                 "message": f"进程退出码: {proc.returncode}",
-            })
+            }))
 
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        print(f"[_run_generate] 异常: {e}\n{tb}", flush=True)
+        print(f"[run_task] 异常: {e}\n{tb}", flush=True)
         if task_state.stopped:
             task_state.error = False
         else:
             task_state.error = True
-            task_state.broadcast({"type": "error", "message": str(e)})
+            task_state.broadcast(task_state.make_event({"type": "error", "message": str(e)}))
     finally:
         task_state.running = False
         task_state.process = None
@@ -515,27 +691,75 @@ def api_generate(req: GenerateRequest):
     if task_state.running:
         raise HTTPException(409, "已有任务在运行中")
 
-    task_state.reset()
     task_state.running = True
 
-    thread = threading.Thread(target=_run_generate, args=(req,), daemon=True)
+    thread = threading.Thread(
+        target=run_task,
+        kwargs={
+            "cmd": build_main_pipeline_command(req),
+            "task_type": "main_pipeline",
+            "task_name": "主流程",
+            "steps": MAIN_PIPELINE_STEPS,
+        },
+        daemon=True,
+    )
     thread.start()
 
     return {"status": "started", "message": "生成任务已启动"}
 
 
+@app.post("/api/global-negatives")
+def api_global_negatives_generate(req: GlobalNegativeRequest):
+    """触发全局负样本独立任务"""
+    if task_state.running:
+        raise HTTPException(409, "已有任务在运行中")
+
+    task_state.running = True
+
+    thread = threading.Thread(
+        target=run_task,
+        kwargs={
+            "cmd": build_global_negative_command(req),
+            "task_type": "global_negative",
+            "task_name": "全局负样本",
+            "steps": GLOBAL_NEGATIVE_STEPS,
+            "auto_start_first_step": True,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "started", "message": "全局负样本任务已启动"}
+
+
+@app.post("/api/audit/run")
+def api_quality_audit_run(req: QualityAuditRequest):
+    """瑙﹀彂璐ㄩ噺鎶芥煡鐙珛浠诲姟"""
+    if task_state.running:
+        raise HTTPException(409, "宸叉湁浠诲姟鍦ㄨ繍琛屼腑")
+
+    task_state.running = True
+
+    thread = threading.Thread(
+        target=run_task,
+        kwargs={
+            "cmd": build_quality_audit_command(req),
+            "task_type": "quality_audit",
+            "task_name": "璐ㄩ噺鎶芥煡",
+            "steps": QUALITY_AUDIT_STEPS,
+            "auto_start_first_step": True,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "started", "message": "璐ㄩ噺鎶芥煡浠诲姟宸插惎鍔?"}
+
+
 @app.get("/api/generate/status")
 def api_generate_status():
     """获取当前任务状态"""
-    return {
-        "running": task_state.running,
-        "current_step": task_state.current_step,
-        "step_statuses": list(task_state.step_statuses),
-        "finished": task_state.finished,
-        "error": task_state.error,
-        "stopped": task_state.stopped,
-        "log_count": len(task_state.logs),
-    }
+    return task_state.snapshot()
 
 
 @app.post("/api/generate/stop")
@@ -549,12 +773,11 @@ def api_generate_stop():
             task_state.error = False
             task_state.replace_running_steps("skipped")
             proc.terminate()
-            task_state.broadcast({
+            task_state.broadcast(task_state.make_event({
                 "type": "stopped",
                 "message": "Stopped",
-                "statuses": list(task_state.step_statuses),
-            })
-            task_state.broadcast({"type": "stopped", "message": "任务已被手动停止"})
+            }))
+            task_state.broadcast(task_state.make_event({"type": "stopped", "message": "任务已被手动停止"}))
             return {"status": "stopped"}
         except Exception as e:
             raise HTTPException(500, str(e))
@@ -562,7 +785,7 @@ def api_generate_stop():
         # 进程已经结束（失败或完成），略过并重置状态
         task_state.running = False
         task_state.process = None
-        task_state.broadcast({"type": "stopped", "message": "任务已结束"})
+        task_state.broadcast(task_state.make_event({"type": "stopped", "message": "任务已结束"}))
         return {"status": "stopped"}
 
 
@@ -633,26 +856,62 @@ async def api_stream():
 
     async def event_generator():
         try:
+            llm_log_base = task_state.llm_log_offset
+            llm_log_pos = llm_log_base
+            last_ping = time.monotonic()
             # 先发送历史日志
             for line in list(task_state.logs):
-                yield {"event": "message", "data": json.dumps({"type": "log", "line": line}, ensure_ascii=False)}
+                yield {"event": "message", "data": json.dumps(task_state.make_event({"type": "log", "line": line}), ensure_ascii=False)}
 
             # 发送当前步骤状态
             yield {
                 "event": "message",
-                "data": json.dumps({
+                "data": json.dumps(task_state.make_event({
                     "type": "step",
                     "step": task_state.current_step,
-                    "statuses": list(task_state.step_statuses),
-                }, ensure_ascii=False),
+                }), ensure_ascii=False),
             }
 
+            llm_text, llm_log_pos = read_llm_log_chunk(llm_log_pos)
+            if llm_text:
+                yield {
+                    "event": "message",
+                    "data": json.dumps(task_state.make_event({
+                        "type": "llm_log",
+                        "text": llm_text,
+                    }), ensure_ascii=False),
+                }
+                last_ping = time.monotonic()
+
             while True:
+                if llm_log_base != task_state.llm_log_offset:
+                    llm_log_base = task_state.llm_log_offset
+                    llm_log_pos = llm_log_base
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    event = await asyncio.wait_for(queue.get(), timeout=0.25)
                     yield {"event": "message", "data": json.dumps(event, ensure_ascii=False)}
+                    last_ping = time.monotonic()
                 except asyncio.TimeoutError:
+                    pass
+
+                llm_text, next_llm_log_pos = read_llm_log_chunk(llm_log_pos)
+                if next_llm_log_pos < llm_log_pos:
+                    llm_log_pos = llm_log_base
+                    llm_text, next_llm_log_pos = read_llm_log_chunk(llm_log_pos)
+
+                if llm_text:
+                    llm_log_pos = next_llm_log_pos
+                    yield {
+                        "event": "message",
+                        "data": json.dumps(task_state.make_event({
+                            "type": "llm_log",
+                            "text": llm_text,
+                        }), ensure_ascii=False),
+                    }
+                    last_ping = time.monotonic()
+                elif time.monotonic() - last_ping >= 30.0:
                     yield {"event": "ping", "data": ""}
+                    last_ping = time.monotonic()
         except asyncio.CancelledError:
             pass
         finally:
@@ -664,29 +923,17 @@ async def api_stream():
 
 # ── LLM 日志 API ───────────────────────────────────────────
 
-LLM_LOG_PATH = PROJECT_DIR / "logs" / "llm_interaction.log"
-
 @app.get("/api/llm-log-size")
 def api_llm_log_size():
     """获取 LLM 日志文件大小"""
-    if not LLM_LOG_PATH.exists():
-        return {"size": 0}
-    return {"size": LLM_LOG_PATH.stat().st_size}
+    return {"size": get_llm_log_size()}
 
 
 @app.get("/api/llm-log")
 def api_llm_log(from_pos: int = 0):
     """从指定位置读取 LLM 日志新增内容"""
-    if not LLM_LOG_PATH.exists():
-        return ""
-
-    try:
-        with open(LLM_LOG_PATH, "r", encoding="utf-8") as f:
-            f.seek(from_pos)
-            new_content = f.read()
-        return new_content
-    except Exception:
-        return ""
+    content, _ = read_llm_log_chunk(from_pos)
+    return content
 
 
 # ── 静态文件 + 首页 ──────────────────────────────────────

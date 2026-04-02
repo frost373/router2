@@ -3,6 +3,33 @@
    ══════════════════════════════════════════════════════════════ */
 
 const API = '';  // 同源
+const DEFAULT_MAIN_TASK = {
+    task_type: 'main_pipeline',
+    task_name: '主流程',
+    steps: [
+        { index: 0, name: '词库生成' },
+        { index: 1, name: '别名扩写' },
+        { index: 2, name: '模板填槽' },
+        { index: 3, name: '对抗样本' },
+        { index: 4, name: 'Paraphrase' },
+        { index: 5, name: '合并输出' },
+        { index: 6, name: '质量抽查' },
+    ],
+};
+const DEFAULT_GLOBAL_NEGATIVE_TASK = {
+    task_type: 'global_negative',
+    task_name: '全局负样本',
+    steps: [
+        { index: 0, name: '全局负样本生成' },
+    ],
+};
+const DEFAULT_AUDIT_TASK = {
+    task_type: 'quality_audit',
+    task_name: '质量抽查',
+    steps: [
+        { index: 0, name: '质量抽查' },
+    ],
+};
 
 // ── 全局状态 ───────────────────────────────────────────────
 let config = null;           // 后端配置
@@ -12,6 +39,7 @@ let outputCache = null;      // 输出数据缓存
 let auditCache = null;       // 审计概览缓存
 let auditRoundCache = new Map(); // 审计详情缓存
 let currentFilter = 'all';   // 数据浏览器筛选
+let currentTaskState = normalizeTaskState(DEFAULT_MAIN_TASK);
 
 // ══════════════════════════════════════════════
 //  初始化
@@ -27,6 +55,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadConfig();
     await loadCommands('mmorpg');
     await Promise.allSettled([loadStats(), loadAuditData()]);
+    await syncTaskState();
     connectSSE();
 });
 
@@ -84,7 +113,7 @@ function activateProgressTab(tabName) {
 
 // ── 去重阈值滑块 ──────────────────────────────────────────
 function initThreshold() {
-    const slider = document.getElementById('cfg-threshold');
+    const slider = document.getElementById('cfg-global-threshold');
     const display = document.getElementById('threshold-display');
     slider.addEventListener('input', () => { display.textContent = slider.value; });
 }
@@ -182,23 +211,27 @@ async function loadConfig() {
             document.getElementById('cfg-paraphrase').value = config.defaults.paraphrase_source;
         }
         if (config.defaults.global_neg_rounds != null) {
-            document.getElementById('cfg-rounds').value = config.defaults.global_neg_rounds;
+            document.getElementById('cfg-global-rounds').value = config.defaults.global_neg_rounds;
         }
         if (config.defaults.dedup_threshold != null) {
-            document.getElementById('cfg-threshold').value = config.defaults.dedup_threshold;
+            document.getElementById('cfg-global-threshold').value = config.defaults.dedup_threshold;
             document.getElementById('threshold-display').textContent = config.defaults.dedup_threshold;
         }
         if (config.defaults.audit_sample_count != null) {
             document.getElementById('cfg-audit-sample-count').value = config.defaults.audit_sample_count;
+            document.getElementById('cfg-audit-task-sample-count').value = config.defaults.audit_sample_count;
         }
         if (config.defaults.audit_rounds != null) {
             document.getElementById('cfg-audit-rounds').value = config.defaults.audit_rounds;
+            document.getElementById('cfg-audit-task-rounds').value = config.defaults.audit_rounds;
         }
 
         // game 切换时更新 commands 和审计/统计视图
         gameSelect.addEventListener('change', async () => {
             const game = gameSelect.value;
             auditRoundCache.clear();
+            updateGlobalNegativePath();
+            updateAuditInputPath();
             await loadCommands(game);
             await Promise.allSettled([loadStats(), loadAuditData()]);
             if (document.getElementById('content-data').classList.contains('active')) {
@@ -216,9 +249,16 @@ async function loadConfig() {
 
         // 绑定按钮
         document.getElementById('btn-generate').addEventListener('click', startGenerate);
-        document.getElementById('btn-stop').addEventListener('click', stopGenerate);
+        document.getElementById('btn-generate-audit').addEventListener('click', startQualityAudit);
+        document.getElementById('btn-generate-global').addEventListener('click', startGlobalNegatives);
+        document.getElementById('btn-stop').addEventListener('click', stopCurrentTask);
         document.getElementById('btn-validate').addEventListener('click', runValidate);
         document.getElementById('btn-refresh-audit').addEventListener('click', () => loadAuditData(true));
+        updateGlobalNegativePath();
+        updateAuditInputPath();
+        updateGlobalNegativeSummary();
+        updateAuditTaskSummary();
+        setTaskState(currentTaskState);
 
     } catch (e) {
         console.error('加载配置失败:', e);
@@ -236,13 +276,28 @@ async function loadCommands(game) {
         commandsList = data.commands || [];
 
         const cmdSelect = document.getElementById('cfg-command');
-        cmdSelect.innerHTML = '<option value="">全部</option>';
+        const selectedCommandIds = getSelectedCommandIds();
+        cmdSelect.innerHTML = '';
+        const allOption = new Option('全部', '');
+        allOption.selected = selectedCommandIds.length === 0;
+        cmdSelect.add(allOption);
         commandsList.forEach(cmd => {
-            cmdSelect.add(new Option(cmd.command_id, cmd.command_id));
+            const option = new Option(cmd.command_id, cmd.command_id);
+            option.selected = selectedCommandIds.includes(cmd.command_id);
+            cmdSelect.add(option);
         });
+        cmdSelect.size = Math.min(Math.max(commandsList.length + 1, 6), 10);
     } catch (e) {
         console.error('加载 commands 失败:', e);
     }
+}
+
+function getSelectedCommandIds() {
+    const selectedOptions = Array.from(document.getElementById('cfg-command').selectedOptions);
+    if (selectedOptions.some(option => option.value === '')) {
+        return [];
+    }
+    return selectedOptions.map(option => option.value);
 }
 
 
@@ -254,27 +309,23 @@ async function startGenerate() {
     const params = {
         game: document.getElementById('cfg-game').value,
         model: document.getElementById('cfg-model').value || null,
-        command_id: document.getElementById('cfg-command').value || null,
+        command_ids: getSelectedCommandIds(),
         think_mode: document.getElementById('cfg-think-mode').checked,
         think_level: document.getElementById('cfg-think-level').value,
         template_count: parseInt(document.getElementById('cfg-template').value),
         adversarial_source: parseInt(document.getElementById('cfg-adversarial').value),
         paraphrase_source: parseInt(document.getElementById('cfg-paraphrase').value),
-        global_neg_rounds: parseInt(document.getElementById('cfg-rounds').value),
-        dedup_threshold: parseFloat(document.getElementById('cfg-threshold').value),
         audit_sample_count: parseInt(document.getElementById('cfg-audit-sample-count').value),
         audit_rounds: parseInt(document.getElementById('cfg-audit-rounds').value),
         skip_vocab: document.getElementById('cfg-skip-vocab').checked,
         skip_aliases: document.getElementById('cfg-skip-aliases').checked,
-        skip_global_negatives: document.getElementById('cfg-skip-global').checked,
     };
 
     try {
-        const llmLogBaseline = await getLlmLogSize();
+        clearLogs();
         await apiPost('/api/generate', params);
-        setRunningState(true);
-        clearLogs(llmLogBaseline);
-        resetPipeline();
+        setTaskState(buildMainTaskPreview());
+        setRunningState(true, '主流程');
 
         // 切换到进度 tab
         document.querySelector('[data-tab="progress"]').click();
@@ -284,11 +335,75 @@ async function startGenerate() {
     }
 }
 
-async function stopGenerate() {
+async function startQualityAudit() {
+    const params = {
+        game: document.getElementById('cfg-game').value,
+        model: document.getElementById('cfg-model').value || null,
+        think_mode: document.getElementById('cfg-think-mode').checked,
+        think_level: document.getElementById('cfg-think-level').value,
+        sample_count: parseInt(document.getElementById('cfg-audit-task-sample-count').value),
+        rounds: parseInt(document.getElementById('cfg-audit-task-rounds').value),
+    };
+
+    try {
+        clearLogs();
+        await apiPost('/api/audit/run', params);
+        setTaskState(buildAuditTaskPreview());
+        setRunningState(true, '质量抽查');
+
+        document.querySelector('[data-tab="progress"]').click();
+        activateProgressTab('log');
+    } catch (e) {
+        alert('启动失败: ' + e.message);
+    }
+}
+
+async function startGlobalNegatives() {
+    const params = {
+        game: document.getElementById('cfg-game').value,
+        model: document.getElementById('cfg-model').value || null,
+        think_mode: document.getElementById('cfg-think-mode').checked,
+        think_level: document.getElementById('cfg-think-level').value,
+        rounds: parseInt(document.getElementById('cfg-global-rounds').value),
+        dedup_threshold: parseFloat(document.getElementById('cfg-global-threshold').value),
+    };
+
+    try {
+        clearLogs();
+        await apiPost('/api/global-negatives', params);
+        setTaskState(buildGlobalNegativeTaskPreview());
+        setRunningState(true, '全局负样本');
+
+        document.querySelector('[data-tab="progress"]').click();
+        activateProgressTab('log');
+    } catch (e) {
+        alert('启动失败: ' + e.message);
+    }
+}
+
+async function stopCurrentTask() {
     try {
         await apiPost('/api/generate/stop');
     } catch (e) {
         alert('停止失败: ' + e.message);
+    }
+}
+
+async function syncTaskState() {
+    try {
+        const state = await apiFetch('/api/generate/status');
+        setTaskState(state);
+        if (state.running) {
+            setRunningState(true, state.task_name);
+        } else if (state.error) {
+            setStatusError(state.task_name);
+        } else if (state.finished) {
+            setStatusDone(state.task_name);
+        } else {
+            setRunningState(false);
+        }
+    } catch (e) {
+        setTaskState(DEFAULT_MAIN_TASK);
     }
 }
 
@@ -324,40 +439,46 @@ function connectSSE() {
 
 function handleSSEEvent(data) {
     switch (data.type) {
+        case 'reset':
+            clearLogs();
+            setTaskState(data);
+            break;
         case 'log':
             appendLog(data.line);
             break;
+        case 'llm_log':
+            appendLlmLog(data.text);
+            break;
         case 'step':
-            updatePipeline(data.statuses);
+            setTaskState(data);
             if (data.statuses) {
                 // 如果有 running 状态则标记运行中
                 if (data.statuses.some(s => s === 'running')) {
-                    setRunningState(true);
-                    startLlmLogPolling();  // 开始 LLM 日志轮询
+                    setRunningState(true, data.task_name);
                 }
             }
             break;
         case 'done':
-            updatePipeline(data.statuses);
+            setTaskState(data);
             setRunningState(false);
-            setStatusDone();
-            stopLlmLogPolling();  // 停止 LLM 日志轮询
-            loadStats();
-            loadAuditData(true);
+            setStatusDone(data.task_name);
+            refreshAfterTaskCompletion(data.task_type);
+            if (data.task_type === 'quality_audit') {
+                activateProgressTab('audit');
+            }
             break;
         case 'error':
+            setTaskState(data);
             appendLog(`[ERROR] ${data.message}`, 'error-line');
             setRunningState(false);
-            stopLlmLogPolling();
-            setStatusError();
+            setStatusError(data.task_name);
             break;
         case 'stopped':
+            setTaskState(data);
             if (!data.statuses) {
                 appendLog(`[STOP] ${data.message}`, 'error-line');
             }
-            updatePipeline(data.statuses);
             setRunningState(false);
-            stopLlmLogPolling();
             break;
     }
 }
@@ -367,47 +488,173 @@ function handleSSEEvent(data) {
 //  UI 更新函数
 // ══════════════════════════════════════════════
 
-function setRunningState(running) {
+function setRunningState(running, taskName = currentTaskState.task_name) {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
-    const btnGen = document.getElementById('btn-generate');
+    const btnMain = document.getElementById('btn-generate');
+    const btnAudit = document.getElementById('btn-generate-audit');
+    const btnGlobal = document.getElementById('btn-generate-global');
     const btnStop = document.getElementById('btn-stop');
+    currentTaskState.running = running;
 
     if (running) {
         dot.className = 'status-dot running';
-        text.textContent = '生成中...';
-        btnGen.classList.add('hidden');
+        text.textContent = `${taskName} 运行中...`;
+        btnMain.disabled = true;
+        btnAudit.disabled = true;
+        btnGlobal.disabled = true;
         btnStop.classList.remove('hidden');
     } else {
         dot.className = 'status-dot';
         text.textContent = '就绪';
-        btnGen.classList.remove('hidden');
+        btnMain.disabled = false;
+        btnAudit.disabled = false;
+        btnGlobal.disabled = false;
         btnStop.classList.add('hidden');
     }
 }
 
-function setStatusDone() {
+function setStatusDone(taskName = currentTaskState.task_name) {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
     dot.className = 'status-dot';
-    text.textContent = 'Done';
+    text.textContent = `${taskName} 已完成`;
 }
 
-function setStatusError() {
+function setStatusError(taskName = currentTaskState.task_name) {
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
     dot.className = 'status-dot error';
-    text.textContent = 'Error';
+    text.textContent = `${taskName} 出错`;
+}
+
+function buildMainTaskPreview() {
+    return normalizeTaskState({
+        ...DEFAULT_MAIN_TASK,
+        running: true,
+    });
+}
+
+function buildGlobalNegativeTaskPreview() {
+    return normalizeTaskState({
+        ...DEFAULT_GLOBAL_NEGATIVE_TASK,
+        current_step: 0,
+        running: true,
+        statuses: ['running'],
+    });
+}
+
+function buildAuditTaskPreview() {
+    return normalizeTaskState({
+        ...DEFAULT_AUDIT_TASK,
+        current_step: 0,
+        running: true,
+        statuses: ['running'],
+    });
+}
+
+function normalizeTaskState(data) {
+    const fallbackMap = {
+        main_pipeline: DEFAULT_MAIN_TASK,
+        global_negative: DEFAULT_GLOBAL_NEGATIVE_TASK,
+        quality_audit: DEFAULT_AUDIT_TASK,
+    };
+    const fallback = fallbackMap[data?.task_type] || DEFAULT_MAIN_TASK;
+    const steps = Array.isArray(data?.steps) && data.steps.length > 0
+        ? data.steps.map((step, idx) => ({
+            index: step.index ?? idx,
+            name: step.name || `步骤 ${idx + 1}`,
+        }))
+        : fallback.steps.map((step, idx) => ({ index: idx, name: step.name }));
+    const statusesSource = Array.isArray(data?.statuses)
+        ? data.statuses
+        : (Array.isArray(data?.step_statuses) ? data.step_statuses : []);
+    const statuses = steps.map((_, idx) => statusesSource[idx] || 'waiting');
+
+    return {
+        task_type: data?.task_type || fallback.task_type,
+        task_name: data?.task_name || fallback.task_name,
+        steps,
+        statuses,
+        current_step: typeof data?.current_step === 'number' ? data.current_step : -1,
+        running: Boolean(data?.running),
+        finished: Boolean(data?.finished),
+        error: Boolean(data?.error),
+        stopped: Boolean(data?.stopped),
+    };
+}
+
+function setTaskState(data) {
+    currentTaskState = normalizeTaskState(data);
+    renderPipeline(currentTaskState.steps, currentTaskState.statuses);
+
+    const taskNameEl = document.getElementById('pipeline-task-name');
+    if (taskNameEl) {
+        taskNameEl.textContent = currentTaskState.task_name;
+    }
+}
+
+function updateGlobalNegativePath() {
+    const game = document.getElementById('cfg-game')?.value || 'mmorpg';
+    const pathEl = document.getElementById('global-neg-path');
+    if (pathEl) {
+        pathEl.textContent = `output/${game}/global_negatives.jsonl`;
+    }
+}
+
+function updateAuditInputPath() {
+    const game = document.getElementById('cfg-game')?.value || 'mmorpg';
+    const pathEl = document.getElementById('audit-input-path');
+    if (pathEl) {
+        pathEl.textContent = `output/${game}/merged_all.jsonl`;
+    }
+}
+
+function updateGlobalNegativeSummary() {
+    const countEl = document.getElementById('global-neg-count');
+    if (!countEl) return;
+
+    const count = outputCache?.global_negatives || 0;
+    countEl.textContent = count > 0 ? `${count} 条` : '未生成';
+}
+
+function updateAuditTaskSummary(data = auditCache) {
+    const statusEl = document.getElementById('audit-task-status');
+    if (!statusEl) return;
+
+    const summary = data && typeof data.summary === 'object' ? data.summary : {};
+    const derived = data && typeof data.derived_summary === 'object' ? data.derived_summary : {};
+    const rounds = Array.isArray(data?.rounds) ? data.rounds : [];
+    const roundsRequested = summary.rounds_requested ?? rounds.length ?? 0;
+    const roundsCompleted = summary.rounds_completed ?? derived.rounds_completed ?? rounds.length;
+    const statusText = getAuditStatusText(summary.status, rounds.length).label;
+
+    if (!data || !data.exists) {
+        statusEl.textContent = data?.error ? '读取失败' : '未生成';
+        return;
+    }
+
+    statusEl.textContent = `${statusText} · ${roundsCompleted}/${roundsRequested || 0}`;
+}
+
+async function refreshAfterTaskCompletion(taskType) {
+    const jobs = [];
+    if (taskType === 'main_pipeline') {
+        jobs.push(loadStats(), loadOutputData(), loadAuditData(true));
+    } else if (taskType === 'global_negative') {
+        jobs.push(loadStats(), loadOutputData());
+    } else if (taskType === 'quality_audit') {
+        jobs.push(loadAuditData(true));
+    }
+    await Promise.allSettled(jobs);
 }
 
 // ── 日志 ──────────────────────────────────────────────────
 let logCount = 0;
 let llmLogCount = 0;
-let lastLlmLogSize = 0;
-let llmLogPollInterval = null;
 const MAX_LLM_LOG_CHARS = 6000;
 
-function clearLogs(llmLogBaseline = 0) {
+function clearLogs() {
     const win = document.getElementById('log-window');
     win.innerHTML = '';
     logCount = 0;
@@ -418,7 +665,6 @@ function clearLogs(llmLogBaseline = 0) {
     llmWin.innerHTML = '<div class="log-placeholder">等待 LLM 调用...</div>';
     llmLogCount = 0;
     document.getElementById('llm-log-count').textContent = '0';
-    lastLlmLogSize = llmLogBaseline;
 }
 
 function appendLog(line, extraClass = '') {
@@ -454,7 +700,7 @@ function appendLog(line, extraClass = '') {
 
 // ── LLM 日志轮询 ─────────────────────────────────────────
 function startLlmLogPolling() {
-    if (llmLogPollInterval) return;
+    return;
 
     // 先获取初始大小
     
@@ -486,6 +732,7 @@ function startLlmLogPolling() {
 }
 
 function stopLlmLogPolling() {
+    return;
     if (llmLogPollInterval) {
         clearInterval(llmLogPollInterval);
         llmLogPollInterval = null;
@@ -493,6 +740,7 @@ function stopLlmLogPolling() {
 }
 
 async function getLlmLogSize() {
+    return 0;
     try {
         const res = await fetch(`${API}/api/llm-log-size`);
         const data = await res.json();
@@ -538,21 +786,35 @@ const STEP_ICONS = {
 };
 
 function resetPipeline() {
-    document.querySelectorAll('.pipe-step').forEach(el => {
-        el.className = 'pipe-step';
-        el.querySelector('.step-icon').textContent = '⏳';
-    });
+    const statuses = currentTaskState.steps.map(() => 'waiting');
+    renderPipeline(currentTaskState.steps, statuses);
     document.getElementById('stats-section').classList.add('hidden');
+}
+
+function renderPipeline(steps, statuses) {
+    const container = document.getElementById('pipeline-steps');
+    if (!container) return;
+    if (!Array.isArray(steps) || steps.length === 0) {
+        container.innerHTML = '<div class="pipeline-placeholder">等待任务信息...</div>';
+        return;
+    }
+
+    container.innerHTML = steps.map((step, idx) => {
+        const status = statuses[idx] || 'waiting';
+        const connector = idx > 0 ? '<div class="pipe-connector"></div>' : '';
+        return `
+            ${connector}
+            <div class="pipe-step ${status}" data-step="${idx}">
+                <div class="step-indicator"><span class="step-icon">${STEP_ICONS[status] || '⏳'}</span></div>
+                <div class="step-label">${escapeHtml(step.name || `步骤 ${idx + 1}`)}</div>
+            </div>`;
+    }).join('');
 }
 
 function updatePipeline(statuses) {
     if (!statuses) return;
-    statuses.forEach((status, idx) => {
-        const el = document.querySelector(`.pipe-step[data-step="${idx}"]`);
-        if (!el) return;
-        el.className = `pipe-step ${status}`;
-        el.querySelector('.step-icon').textContent = STEP_ICONS[status] || '⏳';
-    });
+    currentTaskState.statuses = currentTaskState.steps.map((_, idx) => statuses[idx] || 'waiting');
+    renderPipeline(currentTaskState.steps, currentTaskState.statuses);
 }
 
 
@@ -565,6 +827,7 @@ async function loadStats() {
     try {
         const stats = await apiFetch(`/api/output/${game}`);
         outputCache = stats;
+        updateGlobalNegativeSummary();
         renderStats(stats);
     } catch (e) {
         console.error('加载统计失败:', e);
@@ -623,6 +886,7 @@ function renderAuditSection(data) {
     const roundsEl = document.getElementById('audit-rounds');
     const metaEl = document.getElementById('audit-meta');
     section.classList.remove('hidden');
+    updateAuditTaskSummary(data);
 
     const summary = data && data.summary && typeof data.summary === 'object' ? data.summary : {};
     const derived = data && data.derived_summary && typeof data.derived_summary === 'object' ? data.derived_summary : {};
@@ -643,7 +907,7 @@ function renderAuditSection(data) {
 
     if (!data || !data.exists) {
         metaEl.textContent = data?.error ? `审计读取失败: ${data.error}` : '当前没有质量抽查结果。';
-        roundsEl.innerHTML = renderAuditEmptyState('暂无抽查结果，执行主流程后会在这里展示。');
+        roundsEl.innerHTML = renderAuditEmptyState('暂无抽查结果，执行主流程或独立抽查后会在这里展示。');
         return;
     }
 
@@ -979,6 +1243,7 @@ async function loadOutputData() {
     const game = document.getElementById('cfg-game').value;
     try {
         outputCache = await apiFetch(`/api/output/${game}`);
+        updateGlobalNegativeSummary();
         renderDataGrid();
     } catch (e) {
         console.error('加载输出数据失败:', e);

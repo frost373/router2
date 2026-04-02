@@ -189,8 +189,8 @@ body {
    ══════════════════════════════════════════════ */
 
 .config-panel {
-    width: 300px;
-    min-width: 300px;
+    width: 360px;
+    min-width: 360px;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-default);
     display: flex;
@@ -242,6 +242,19 @@ body {
     border-color: var(--accent-blue);
     box-shadow: 0 0 0 3px var(--accent-blue-glow);
 }
+.form-control[multiple] {
+    min-height: 180px;
+    padding: 6px;
+}
+.form-control[multiple] option {
+    padding: 6px 8px;
+}
+
+.form-note {
+    margin-top: var(--space-xs);
+    font-size: 12px;
+    color: var(--text-secondary);
+}
 
 .form-range {
     width: 100%;
@@ -274,6 +287,113 @@ body {
     height: 1px;
     background: var(--border-default);
     margin: var(--space-md) 0;
+}
+
+.config-section {
+    margin-bottom: var(--space-lg);
+}
+
+.config-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    margin-bottom: var(--space-xs);
+}
+
+.config-section-desc {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-md);
+}
+
+.task-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    margin-bottom: var(--space-lg);
+    box-shadow: var(--shadow-sm);
+}
+
+.task-card-main {
+    border-top: 3px solid var(--accent-blue);
+}
+
+.task-card-audit {
+    border-top: 3px solid var(--accent-yellow);
+}
+
+.task-card-global {
+    border-top: 3px solid var(--accent-red);
+}
+
+.task-card-header {
+    margin-bottom: var(--space-md);
+}
+
+.task-card-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.task-card-header p {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.task-card-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.task-card-footer {
+    border-top: 1px solid var(--border-default);
+    margin-top: var(--space-sm);
+    padding-top: var(--space-md);
+}
+
+.task-card-note {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: var(--space-md);
+}
+
+.task-card-btn {
+    width: 100%;
+}
+
+.task-meta-grid {
+    display: grid;
+    gap: var(--space-sm);
+}
+
+.task-meta-item {
+    padding: var(--space-sm) var(--space-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+}
+
+.task-meta-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 2px;
+}
+
+.task-meta-value {
+    font-size: 13px;
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    word-break: break-all;
+}
+
+.task-meta-path {
+    color: var(--accent-blue);
 }
 
 /* Toggle 开关 */
@@ -321,6 +441,9 @@ body {
 .panel-footer {
     padding: var(--space-md) var(--space-lg);
     border-top: 1px solid var(--border-default);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
 }
 
 /* ══════════════════════════════════════════════
@@ -374,6 +497,13 @@ body {
 
 .btn-generate { width: 100%; }
 .btn-stop { width: 100%; }
+
+.btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
 
 .hidden { display: none !important; }
 
@@ -478,6 +608,20 @@ body {
     color: var(--text-secondary);
 }
 
+.pipeline-section-header {
+    align-items: center;
+}
+
+.pipeline-task-badge {
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    border: 1px solid rgba(59, 130, 246, 0.25);
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--accent-blue);
+    font-size: 12px;
+    font-weight: 600;
+}
+
 .pipeline-steps {
     display: flex;
     align-items: center;
@@ -487,6 +631,13 @@ body {
     border-radius: var(--radius-md);
     border: 1px solid var(--border-default);
     overflow-x: auto;
+}
+
+.pipeline-placeholder {
+    width: 100%;
+    text-align: center;
+    color: var(--text-tertiary);
+    padding: var(--space-md);
 }
 
 .pipe-step {
@@ -624,6 +775,10 @@ body {
     justify-content: space-between;
     gap: var(--space-md);
     margin-bottom: var(--space-md);
+}
+
+.section-header h3 {
+    margin-bottom: 0;
 }
 
 .audit-section {
@@ -1242,4 +1397,8 @@ body {
     .charts-row { flex-direction: column; }
     .audit-summary-grid { grid-template-columns: repeat(2, 1fr); }
     .audit-detail-grid { grid-template-columns: repeat(2, 1fr); }
+    .task-card-footer {
+        display: flex;
+        flex-direction: column;
+    }
 }
