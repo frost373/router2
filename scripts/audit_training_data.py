@@ -401,7 +401,7 @@ def run_quality_audit(
                 prompt,
                 model=model,
                 temperature=0.2,
-                max_tokens=12000,
+                max_tokens=32000,
                 think_mode=think_mode,
                 think_level=think_level,
             )
