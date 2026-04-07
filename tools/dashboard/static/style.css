@@ -242,6 +242,14 @@ body {
     border-color: var(--accent-blue);
     box-shadow: 0 0 0 3px var(--accent-blue-glow);
 }
+.form-control-inline {
+    width: auto;
+    min-width: 120px;
+}
+.form-control-grow {
+    flex: 1;
+    min-width: 220px;
+}
 .form-control[multiple] {
     min-height: 180px;
     padding: 6px;
@@ -323,6 +331,10 @@ body {
 
 .task-card-audit {
     border-top: 3px solid var(--accent-yellow);
+}
+
+.task-card-full-check {
+    border-top: 3px solid var(--accent-cyan);
 }
 
 .task-card-global {
@@ -986,6 +998,155 @@ body {
     min-width: 220px;
 }
 
+.full-check-toolbar {
+    display: flex;
+    gap: var(--space-sm);
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: var(--space-md);
+}
+
+.full-check-toolbar-actions {
+    justify-content: space-between;
+}
+
+.full-check-selection {
+    margin-left: auto;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.full-check-batches {
+    margin-top: var(--space-md);
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--space-sm);
+}
+
+.full-check-batch-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+}
+
+.full-check-batch-top,
+.full-check-issue-top,
+.full-check-issue-actions,
+.full-check-issue-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    flex-wrap: wrap;
+}
+
+.full-check-batch-top,
+.full-check-issue-top {
+    justify-content: space-between;
+}
+
+.full-check-batch-meta,
+.full-check-issue-meta,
+.full-check-issue-summary,
+.full-check-issue-path {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.full-check-issues {
+    margin-top: var(--space-md);
+    display: grid;
+    gap: var(--space-md);
+}
+
+.full-check-issue-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+}
+
+.full-check-issue-card.selected {
+    border-color: var(--accent-blue);
+    box-shadow: var(--shadow-glow-blue);
+}
+
+.full-check-issue-main {
+    display: flex;
+    gap: var(--space-md);
+    align-items: flex-start;
+}
+
+.full-check-issue-select {
+    margin-top: 3px;
+}
+
+.full-check-issue-content {
+    flex: 1;
+    display: grid;
+    gap: var(--space-sm);
+}
+
+.full-check-issue-text {
+    font-size: 15px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.full-check-issue-compare {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-sm);
+}
+
+.full-check-issue-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: var(--space-sm) var(--space-md);
+}
+
+.full-check-issue-box-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.full-check-issue-box-value {
+    font-size: 13px;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.full-check-issue-actions {
+    justify-content: flex-end;
+}
+
+.full-check-issue-actions .btn {
+    min-width: 110px;
+}
+
+.resolution-pending {
+    background: rgba(59, 130, 246, 0.16);
+    color: var(--accent-blue);
+}
+
+.resolution-applied {
+    background: rgba(34, 197, 94, 0.16);
+    color: var(--accent-green);
+}
+
+.resolution-ignored {
+    background: rgba(139, 148, 158, 0.16);
+    color: var(--text-secondary);
+}
+
+.resolution-conflict {
+    background: rgba(239, 68, 68, 0.16);
+    color: var(--accent-red);
+}
+
 .log-section { flex: 1; display: flex; flex-direction: column; min-height: 200px; }
 
 .log-header {
@@ -1397,6 +1558,9 @@ body {
     .charts-row { flex-direction: column; }
     .audit-summary-grid { grid-template-columns: repeat(2, 1fr); }
     .audit-detail-grid { grid-template-columns: repeat(2, 1fr); }
+    .full-check-issue-compare { grid-template-columns: 1fr; }
+    .full-check-toolbar-actions { justify-content: flex-start; }
+    .full-check-selection { margin-left: 0; width: 100%; }
     .task-card-footer {
         display: flex;
         flex-direction: column;

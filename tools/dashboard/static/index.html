@@ -144,6 +144,39 @@
                         </div>
                     </div>
 
+                    <div class="task-card task-card-full-check">
+                        <div class="task-card-header">
+                            <h3>全部数据检查</h3>
+                            <p>对 merged_all.jsonl 做分批全量检查，支持断点继续，并可在页面上直接处理问题样本。</p>
+                        </div>
+                        <div class="task-card-body">
+                            <div class="form-group">
+                                <label>每批样本数</label>
+                                <input type="number" id="cfg-full-check-batch-size" class="form-control" value="20" min="1" max="100">
+                            </div>
+                            <div class="form-group toggle-group">
+                                <label>重新开始</label>
+                                <label class="toggle"><input type="checkbox" id="cfg-full-check-restart"><span class="toggle-slider"></span></label>
+                            </div>
+                            <div class="task-meta-grid">
+                                <div class="task-meta-item">
+                                    <div class="task-meta-label">当前结果</div>
+                                    <div class="task-meta-value" id="full-check-task-status">未生成</div>
+                                </div>
+                                <div class="task-meta-item">
+                                    <div class="task-meta-label">输入文件</div>
+                                    <div class="task-meta-value task-meta-path" id="full-check-input-path">output/mmorpg/merged_all.jsonl</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="task-card-footer">
+                            <p class="task-card-note">默认继续未完成 / 失败批次；勾选“重新开始”会清空 `output/{game}/full_data_check/` 后重跑。</p>
+                            <button class="btn btn-outline task-card-btn" id="btn-generate-full-check">
+                                <span class="btn-icon">🔎</span> 开始 / 继续全部数据检查
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="task-card task-card-global">
                         <div class="task-card-header">
                             <h3>全局负样本任务</h3>
@@ -206,6 +239,7 @@
                     <div class="progress-subtabs">
                         <button class="progress-subtab" data-progress-tab="stats" id="progress-tab-stats">📊 生成统计</button>
                         <button class="progress-subtab" data-progress-tab="audit" id="progress-tab-audit">🧪 质量抽查</button>
+                        <button class="progress-subtab" data-progress-tab="full-check" id="progress-tab-full-check">🔎 全部数据检查</button>
                         <button class="progress-subtab active" data-progress-tab="log" id="progress-tab-log">📝 生成日志</button>
                     </div>
 
@@ -274,6 +308,66 @@
                         </div>
                     </div>
 
+                    <div class="progress-panel" id="progress-panel-full-check">
+                        <div class="audit-section hidden" id="full-check-section">
+                            <div class="section-header">
+                                <h3>🔎 全部数据检查</h3>
+                                <button class="btn btn-sm btn-outline" id="btn-refresh-full-check" type="button">刷新</button>
+                            </div>
+                            <div class="audit-summary-grid">
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">状态</div>
+                                    <div class="audit-stat-value" id="full-check-status-value">-</div>
+                                </div>
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">批次</div>
+                                    <div class="audit-stat-value mono" id="full-check-batches-value">0/0</div>
+                                </div>
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">问题样本</div>
+                                    <div class="audit-stat-value mono" id="full-check-issues-value">0</div>
+                                </div>
+                                <div class="audit-stat-card">
+                                    <div class="audit-stat-label">已处理 / 忽略</div>
+                                    <div class="audit-stat-value mono" id="full-check-resolved-value">0 / 0</div>
+                                </div>
+                            </div>
+                            <div class="audit-meta" id="full-check-meta"></div>
+                            <div class="full-check-toolbar">
+                                <select id="full-check-filter-status" class="form-control form-control-inline">
+                                    <option value="pending,conflict">未处理</option>
+                                    <option value="">全部状态</option>
+                                    <option value="applied">已处理</option>
+                                    <option value="ignored">已忽略</option>
+                                    <option value="conflict">冲突</option>
+                                </select>
+                                <select id="full-check-filter-verdict" class="form-control form-control-inline">
+                                    <option value="fail,borderline">fail + borderline</option>
+                                    <option value="">全部 verdict</option>
+                                    <option value="fail">fail</option>
+                                    <option value="borderline">borderline</option>
+                                    <option value="fatal">fatal</option>
+                                </select>
+                                <select id="full-check-filter-source" class="form-control form-control-inline">
+                                    <option value="">全部来源</option>
+                                    <option value="template">template</option>
+                                    <option value="paraphrase">paraphrase</option>
+                                    <option value="adversarial">adversarial</option>
+                                    <option value="global_negative">global_negative</option>
+                                </select>
+                                <input type="text" id="full-check-filter-query" class="form-control form-control-inline form-control-grow" placeholder="搜索文本 / 原因 / 建议">
+                                <button class="btn btn-sm btn-outline" id="btn-full-check-filter" type="button">筛选</button>
+                            </div>
+                            <div class="full-check-toolbar full-check-toolbar-actions">
+                                <button class="btn btn-sm btn-outline" id="btn-full-check-apply-selected" type="button">批量应用建议</button>
+                                <button class="btn btn-sm btn-outline" id="btn-full-check-ignore-selected" type="button">批量忽略</button>
+                                <div class="full-check-selection" id="full-check-selection-count">已选 0 条</div>
+                            </div>
+                            <div class="full-check-batches" id="full-check-batches"></div>
+                            <div class="full-check-issues" id="full-check-issues"></div>
+                        </div>
+                    </div>
+
                     <div class="progress-panel active" id="progress-panel-log">
                         <div class="log-section">
                             <div class="log-header">
@@ -310,16 +404,15 @@
                             <p>点击上方 "刷新" 加载已生成的数据</p>
                         </div>
                     </div>
+                </div>
 
-                    <!-- 样本详情弹窗 -->
-                    <div class="modal-backdrop hidden" id="modal-backdrop">
-                        <div class="modal" id="sample-modal">
-                            <div class="modal-header">
-                                <h3 id="modal-title">样本详情</h3>
-                                <button class="modal-close" id="modal-close">&times;</button>
-                            </div>
-                            <div class="modal-body" id="modal-body"></div>
+                <div class="modal-backdrop hidden" id="modal-backdrop">
+                    <div class="modal" id="sample-modal">
+                        <div class="modal-header">
+                            <h3 id="modal-title">样本详情</h3>
+                            <button class="modal-close" id="modal-close">&times;</button>
                         </div>
+                        <div class="modal-body" id="modal-body"></div>
                     </div>
                 </div>
             </main>

@@ -34,6 +34,16 @@ OUTPUT_DIR = PROJECT_DIR / "output"
 LLM_CONFIG = PROJECT_DIR / "LLM.txt"
 LLM_LOG_PATH = PROJECT_DIR / "logs" / "llm_interaction.log"
 
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from full_data_check import (  # noqa: E402
+    DEFAULT_BATCH_SIZE as DEFAULT_FULL_CHECK_BATCH_SIZE,
+    apply_full_check_actions,
+    get_full_check_issues,
+    get_full_check_overview,
+)
+
 # ── FastAPI 应用 ────────────────────────────────────────
 app = FastAPI(title="训练数据生成器 Dashboard")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -56,6 +66,11 @@ GLOBAL_NEGATIVE_STEPS = [
 ]
 QUALITY_AUDIT_STEPS = [
     {"name": "璐ㄩ噺鎶芥煡"},
+]
+FULL_DATA_CHECK_STEPS = [
+    {"key": "Step 1", "name": "构建快照"},
+    {"key": "Step 2", "name": "全量检查"},
+    {"key": "Step 3", "name": "汇总结果"},
 ]
 
 
@@ -450,6 +465,24 @@ class QualityAuditRequest(BaseModel):
     rounds: int = 2
 
 
+class FullDataCheckRequest(BaseModel):
+    game: str = "mmorpg"
+    model: Optional[str] = None
+    think_mode: bool = False
+    think_level: str = "high"
+    batch_size: int = DEFAULT_FULL_CHECK_BATCH_SIZE
+    restart: bool = False
+
+
+class FullCheckActionItem(BaseModel):
+    sample_id: str
+    action: str
+
+
+class FullCheckActionRequest(BaseModel):
+    actions: list[FullCheckActionItem] = Field(default_factory=list)
+
+
 def get_selected_command_ids(args: GenerateRequest) -> list[str]:
     selected: list[str] = []
 
@@ -523,6 +556,24 @@ def build_quality_audit_command(args: QualityAuditRequest) -> list[str]:
     ]
     if args.model:
         cmd.extend(["--model", args.model])
+    if args.think_mode:
+        cmd.append("--think_mode")
+        cmd.extend(["--think_level", args.think_level])
+    return cmd
+
+
+def build_full_data_check_command(args: FullDataCheckRequest) -> list[str]:
+    cmd = [
+        sys.executable,
+        "-u",
+        str(SCRIPTS_DIR / "full_data_check.py"),
+        "--game", args.game,
+        "--batch_size", str(args.batch_size),
+    ]
+    if args.model:
+        cmd.extend(["--model", args.model])
+    if args.restart:
+        cmd.append("--restart")
     if args.think_mode:
         cmd.append("--think_mode")
         cmd.extend(["--think_level", args.think_level])
@@ -646,6 +697,7 @@ def api_config():
             "dedup_threshold": 0.92,
             "audit_sample_count": 12,
             "audit_rounds": 2,
+            "full_check_batch_size": DEFAULT_FULL_CHECK_BATCH_SIZE,
         },
     }
 
@@ -756,6 +808,29 @@ def api_quality_audit_run(req: QualityAuditRequest):
     return {"status": "started", "message": "璐ㄩ噺鎶芥煡浠诲姟宸插惎鍔?"}
 
 
+@app.post("/api/full-check/run")
+def api_full_data_check_run(req: FullDataCheckRequest):
+    """触发全量数据检查任务"""
+    if task_state.running:
+        raise HTTPException(409, "已有任务在运行中")
+
+    task_state.running = True
+
+    thread = threading.Thread(
+        target=run_task,
+        kwargs={
+            "cmd": build_full_data_check_command(req),
+            "task_type": "full_data_check",
+            "task_name": "全部数据检查",
+            "steps": FULL_DATA_CHECK_STEPS,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "started", "message": "全部数据检查任务已启动"}
+
+
 @app.get("/api/generate/status")
 def api_generate_status():
     """获取当前任务状态"""
@@ -810,6 +885,54 @@ def api_audit_round(game: str, round_index: int):
         raise HTTPException(404, f"audit_round_{round_index:02d}.json 不存在")
     except ValueError as e:
         raise HTTPException(500, str(e))
+
+
+@app.get("/api/full-check/{game}")
+def api_full_check_overview(game: str):
+    """Get full-data-check overview."""
+    return get_full_check_overview(game)
+
+
+@app.get("/api/full-check/{game}/issues")
+def api_full_check_issues(
+    game: str,
+    resolution_status: str = "",
+    verdict: str = "",
+    source_type: str = "",
+    q: str = "",
+    limit: int = 200,
+    offset: int = 0,
+):
+    """Get full-data-check issues."""
+    try:
+        return get_full_check_issues(
+            game,
+            resolution_status=resolution_status,
+            verdict=verdict,
+            source_type=source_type,
+            q=q,
+            limit=limit,
+            offset=offset,
+        )
+    except FileNotFoundError:
+        raise HTTPException(404, f"full_data_check/{game} 不存在")
+
+
+@app.post("/api/full-check/{game}/actions/apply")
+def api_full_check_apply_actions(game: str, req: FullCheckActionRequest):
+    """Apply one or more full-data-check actions."""
+    if task_state.running:
+        raise HTTPException(409, "任务运行中，暂不能处理检查结果")
+
+    try:
+        return apply_full_check_actions(
+            game,
+            [{"sample_id": item.sample_id, "action": item.action} for item in req.actions],
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/output/{game}/{command_id}/{file_type}")

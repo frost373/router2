@@ -30,6 +30,15 @@ const DEFAULT_AUDIT_TASK = {
         { index: 0, name: '质量抽查' },
     ],
 };
+const DEFAULT_FULL_CHECK_TASK = {
+    task_type: 'full_data_check',
+    task_name: '全部数据检查',
+    steps: [
+        { index: 0, name: '构建快照' },
+        { index: 1, name: '全量检查' },
+        { index: 2, name: '汇总结果' },
+    ],
+};
 
 // ── 全局状态 ───────────────────────────────────────────────
 let config = null;           // 后端配置
@@ -38,6 +47,12 @@ let eventSource = null;      // SSE 连接
 let outputCache = null;      // 输出数据缓存
 let auditCache = null;       // 审计概览缓存
 let auditRoundCache = new Map(); // 审计详情缓存
+let fullCheckCache = null;   // 全量检查概览缓存
+let fullCheckIssuesCache = [];
+let fullCheckSelected = new Set();
+let fullCheckPollTimer = null;
+let fullCheckLoading = false;
+let fullCheckIssuesLoading = false;
 let currentFilter = 'all';   // 数据浏览器筛选
 let currentTaskState = normalizeTaskState(DEFAULT_MAIN_TASK);
 
@@ -54,7 +69,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initFilterButtons();
     await loadConfig();
     await loadCommands('mmorpg');
-    await Promise.allSettled([loadStats(), loadAuditData()]);
+    await Promise.allSettled([loadStats(), loadAuditData(), loadFullCheckData()]);
     await syncTaskState();
     connectSSE();
 });
@@ -225,15 +240,20 @@ async function loadConfig() {
             document.getElementById('cfg-audit-rounds').value = config.defaults.audit_rounds;
             document.getElementById('cfg-audit-task-rounds').value = config.defaults.audit_rounds;
         }
+        if (config.defaults.full_check_batch_size != null) {
+            document.getElementById('cfg-full-check-batch-size').value = config.defaults.full_check_batch_size;
+        }
 
         // game 切换时更新 commands 和审计/统计视图
         gameSelect.addEventListener('change', async () => {
             const game = gameSelect.value;
             auditRoundCache.clear();
+            fullCheckSelected.clear();
             updateGlobalNegativePath();
             updateAuditInputPath();
+            updateFullCheckInputPath();
             await loadCommands(game);
-            await Promise.allSettled([loadStats(), loadAuditData()]);
+            await Promise.allSettled([loadStats(), loadAuditData(), loadFullCheckData()]);
             if (document.getElementById('content-data').classList.contains('active')) {
                 await loadOutputData();
             }
@@ -250,14 +270,21 @@ async function loadConfig() {
         // 绑定按钮
         document.getElementById('btn-generate').addEventListener('click', startGenerate);
         document.getElementById('btn-generate-audit').addEventListener('click', startQualityAudit);
+        document.getElementById('btn-generate-full-check').addEventListener('click', startFullCheck);
         document.getElementById('btn-generate-global').addEventListener('click', startGlobalNegatives);
         document.getElementById('btn-stop').addEventListener('click', stopCurrentTask);
         document.getElementById('btn-validate').addEventListener('click', runValidate);
         document.getElementById('btn-refresh-audit').addEventListener('click', () => loadAuditData(true));
+        document.getElementById('btn-refresh-full-check').addEventListener('click', () => loadFullCheckData(true));
+        document.getElementById('btn-full-check-filter').addEventListener('click', () => loadFullCheckIssues());
+        document.getElementById('btn-full-check-apply-selected').addEventListener('click', () => applySelectedFullCheckAction('apply_expected'));
+        document.getElementById('btn-full-check-ignore-selected').addEventListener('click', () => applySelectedFullCheckAction('ignore'));
         updateGlobalNegativePath();
         updateAuditInputPath();
+        updateFullCheckInputPath();
         updateGlobalNegativeSummary();
         updateAuditTaskSummary();
+        updateFullCheckTaskSummary();
         setTaskState(currentTaskState);
 
     } catch (e) {
@@ -350,6 +377,29 @@ async function startQualityAudit() {
         await apiPost('/api/audit/run', params);
         setTaskState(buildAuditTaskPreview());
         setRunningState(true, '质量抽查');
+
+        document.querySelector('[data-tab="progress"]').click();
+        activateProgressTab('log');
+    } catch (e) {
+        alert('启动失败: ' + e.message);
+    }
+}
+
+async function startFullCheck() {
+    const params = {
+        game: document.getElementById('cfg-game').value,
+        model: document.getElementById('cfg-model').value || null,
+        think_mode: document.getElementById('cfg-think-mode').checked,
+        think_level: document.getElementById('cfg-think-level').value,
+        batch_size: parseInt(document.getElementById('cfg-full-check-batch-size').value, 10),
+        restart: document.getElementById('cfg-full-check-restart').checked,
+    };
+
+    try {
+        clearLogs();
+        await apiPost('/api/full-check/run', params);
+        setTaskState(buildFullCheckTaskPreview());
+        setRunningState(true, '全部数据检查');
 
         document.querySelector('[data-tab="progress"]').click();
         activateProgressTab('log');
@@ -465,6 +515,8 @@ function handleSSEEvent(data) {
             refreshAfterTaskCompletion(data.task_type);
             if (data.task_type === 'quality_audit') {
                 activateProgressTab('audit');
+            } else if (data.task_type === 'full_data_check') {
+                activateProgressTab('full-check');
             }
             break;
         case 'error':
@@ -493,6 +545,7 @@ function setRunningState(running, taskName = currentTaskState.task_name) {
     const text = document.getElementById('status-text');
     const btnMain = document.getElementById('btn-generate');
     const btnAudit = document.getElementById('btn-generate-audit');
+    const btnFullCheck = document.getElementById('btn-generate-full-check');
     const btnGlobal = document.getElementById('btn-generate-global');
     const btnStop = document.getElementById('btn-stop');
     currentTaskState.running = running;
@@ -502,6 +555,7 @@ function setRunningState(running, taskName = currentTaskState.task_name) {
         text.textContent = `${taskName} 运行中...`;
         btnMain.disabled = true;
         btnAudit.disabled = true;
+        btnFullCheck.disabled = true;
         btnGlobal.disabled = true;
         btnStop.classList.remove('hidden');
     } else {
@@ -509,9 +563,13 @@ function setRunningState(running, taskName = currentTaskState.task_name) {
         text.textContent = '就绪';
         btnMain.disabled = false;
         btnAudit.disabled = false;
+        btnFullCheck.disabled = false;
         btnGlobal.disabled = false;
         btnStop.classList.add('hidden');
     }
+
+    syncFullCheckPolling();
+    updateFullCheckSelectionCount();
 }
 
 function setStatusDone(taskName = currentTaskState.task_name) {
@@ -553,11 +611,21 @@ function buildAuditTaskPreview() {
     });
 }
 
+function buildFullCheckTaskPreview() {
+    return normalizeTaskState({
+        ...DEFAULT_FULL_CHECK_TASK,
+        current_step: 0,
+        running: true,
+        statuses: ['running', 'waiting', 'waiting'],
+    });
+}
+
 function normalizeTaskState(data) {
     const fallbackMap = {
         main_pipeline: DEFAULT_MAIN_TASK,
         global_negative: DEFAULT_GLOBAL_NEGATIVE_TASK,
         quality_audit: DEFAULT_AUDIT_TASK,
+        full_data_check: DEFAULT_FULL_CHECK_TASK,
     };
     const fallback = fallbackMap[data?.task_type] || DEFAULT_MAIN_TASK;
     const steps = Array.isArray(data?.steps) && data.steps.length > 0
@@ -610,6 +678,14 @@ function updateAuditInputPath() {
     }
 }
 
+function updateFullCheckInputPath() {
+    const game = document.getElementById('cfg-game')?.value || 'mmorpg';
+    const pathEl = document.getElementById('full-check-input-path');
+    if (pathEl) {
+        pathEl.textContent = `output/${game}/merged_all.jsonl`;
+    }
+}
+
 function updateGlobalNegativeSummary() {
     const countEl = document.getElementById('global-neg-count');
     if (!countEl) return;
@@ -637,6 +713,20 @@ function updateAuditTaskSummary(data = auditCache) {
     statusEl.textContent = `${statusText} · ${roundsCompleted}/${roundsRequested || 0}`;
 }
 
+function updateFullCheckTaskSummary(data = fullCheckCache) {
+    const statusEl = document.getElementById('full-check-task-status');
+    if (!statusEl) return;
+
+    const summary = data && typeof data.summary === 'object' ? data.summary : {};
+    if (!data || !data.exists || !summary) {
+        statusEl.textContent = '未生成';
+        return;
+    }
+
+    const statusText = summary.status || 'unknown';
+    statusEl.textContent = `${statusText} · ${summary.completed_batches || 0}/${summary.batch_count || 0}`;
+}
+
 async function refreshAfterTaskCompletion(taskType) {
     const jobs = [];
     if (taskType === 'main_pipeline') {
@@ -645,6 +735,8 @@ async function refreshAfterTaskCompletion(taskType) {
         jobs.push(loadStats(), loadOutputData());
     } else if (taskType === 'quality_audit') {
         jobs.push(loadAuditData(true));
+    } else if (taskType === 'full_data_check') {
+        jobs.push(loadFullCheckData(true));
     }
     await Promise.allSettled(jobs);
 }
@@ -878,6 +970,527 @@ async function loadAuditData(forceRefresh = false) {
             derived_summary: null,
             summary: null,
         });
+    }
+}
+
+async function loadFullCheckData(forceRefresh = false) {
+    if (fullCheckLoading) {
+        return fullCheckCache;
+    }
+
+    const game = document.getElementById('cfg-game').value;
+    fullCheckLoading = true;
+
+    try {
+        fullCheckCache = await apiFetch(`/api/full-check/${encodeURIComponent(game)}`);
+        renderFullCheckSection(fullCheckCache);
+        await loadFullCheckIssues();
+        return fullCheckCache;
+    } catch (e) {
+        console.error('加载全部数据检查结果失败:', e);
+        fullCheckCache = {
+            exists: false,
+            error: e.message,
+            manifest: null,
+            summary: null,
+            unresolved_count: 0,
+        };
+        fullCheckIssuesCache = [];
+        fullCheckSelected.clear();
+        renderFullCheckSection(fullCheckCache);
+        renderFullCheckIssues({
+            total: 0,
+            limit: 0,
+            offset: 0,
+            issues: [],
+        });
+        return fullCheckCache;
+    } finally {
+        fullCheckLoading = false;
+    }
+}
+
+async function loadFullCheckIssues() {
+    if (fullCheckIssuesLoading) {
+        return {
+            total: fullCheckIssuesCache.length,
+            issues: fullCheckIssuesCache,
+        };
+    }
+
+    const issuesEl = document.getElementById('full-check-issues');
+    if (!fullCheckCache || !fullCheckCache.exists) {
+        fullCheckIssuesCache = [];
+        fullCheckSelected.clear();
+        renderFullCheckIssues({
+            total: 0,
+            limit: 0,
+            offset: 0,
+            issues: [],
+        });
+        return {
+            total: 0,
+            issues: [],
+        };
+    }
+
+    if (issuesEl) {
+        issuesEl.innerHTML = renderAuditEmptyState('正在加载问题列表...');
+    }
+
+    const game = document.getElementById('cfg-game').value;
+    const params = new URLSearchParams();
+    const resolutionStatus = document.getElementById('full-check-filter-status').value;
+    const verdict = document.getElementById('full-check-filter-verdict').value;
+    const sourceType = document.getElementById('full-check-filter-source').value;
+    const query = document.getElementById('full-check-filter-query').value.trim();
+
+    if (resolutionStatus) params.set('resolution_status', resolutionStatus);
+    if (verdict) params.set('verdict', verdict);
+    if (sourceType) params.set('source_type', sourceType);
+    if (query) params.set('q', query);
+    params.set('limit', '500');
+    params.set('offset', '0');
+
+    fullCheckIssuesLoading = true;
+    try {
+        const data = await apiFetch(`/api/full-check/${encodeURIComponent(game)}/issues?${params.toString()}`);
+        fullCheckIssuesCache = Array.isArray(data.issues) ? data.issues : [];
+        const validIds = new Set(fullCheckIssuesCache.map(item => item.sample_id));
+        fullCheckSelected = new Set([...fullCheckSelected].filter(sampleId => validIds.has(sampleId)));
+        renderFullCheckIssues(data);
+        return data;
+    } catch (e) {
+        console.error('加载全部数据检查问题失败:', e);
+        fullCheckIssuesCache = [];
+        fullCheckSelected.clear();
+        renderFullCheckIssues({
+            total: 0,
+            limit: 0,
+            offset: 0,
+            issues: [],
+            error: e.message,
+        });
+        return null;
+    } finally {
+        fullCheckIssuesLoading = false;
+        updateFullCheckSelectionCount();
+    }
+}
+
+function renderFullCheckSection(data) {
+    const section = document.getElementById('full-check-section');
+    const batchesEl = document.getElementById('full-check-batches');
+    const issuesEl = document.getElementById('full-check-issues');
+    const metaEl = document.getElementById('full-check-meta');
+    section.classList.remove('hidden');
+    updateFullCheckTaskSummary(data);
+
+    const summary = data && typeof data.summary === 'object' ? data.summary : {};
+    const manifest = data && typeof data.manifest === 'object' ? data.manifest : {};
+    const statusMeta = getFullCheckStatusMeta(summary.status, Boolean(data?.exists));
+    const resolutionCounts = summary && typeof summary.resolution_counts === 'object'
+        ? summary.resolution_counts
+        : {};
+    const resolvedCount = (resolutionCounts.applied || 0) + (resolutionCounts.ignored || 0);
+
+    document.getElementById('full-check-status-value').innerHTML = renderAuditBadge(statusMeta.label, statusMeta.className);
+    document.getElementById('full-check-batches-value').textContent = `${summary.completed_batches || 0}/${summary.batch_count || 0}`;
+    document.getElementById('full-check-issues-value').textContent = String(summary.total_issues || 0);
+    document.getElementById('full-check-resolved-value').textContent = `${resolvedCount} / ${summary.total_issues || 0}`;
+
+    if (!data || !data.exists) {
+        metaEl.textContent = data?.error ? `读取失败: ${data.error}` : '当前没有全部数据检查结果。';
+        batchesEl.innerHTML = renderAuditEmptyState('暂无批次结果。');
+        issuesEl.innerHTML = renderAuditEmptyState('暂无问题结果。');
+        return;
+    }
+
+    metaEl.textContent = [
+        manifest.merged_all_path ? `数据集: ${manifest.merged_all_path}` : '',
+        summary.latest_batch_updated_at ? `最近更新: ${formatDateTime(summary.latest_batch_updated_at)}` : '',
+        summary.failed_batches ? `失败批次: ${summary.failed_batches}` : '',
+        data.can_resume ? '可继续未完成 / 失败批次' : '',
+        data.unresolved_count > 0 ? `待处理: ${data.unresolved_count}` : '',
+    ].filter(Boolean).join(' | ');
+
+    renderFullCheckBatches(Array.isArray(summary.batches) ? summary.batches : []);
+    if (!fullCheckIssuesLoading) {
+        issuesEl.innerHTML = renderAuditEmptyState('正在加载问题列表...');
+    }
+}
+
+function renderFullCheckBatches(batches) {
+    const batchesEl = document.getElementById('full-check-batches');
+    if (!Array.isArray(batches) || batches.length === 0) {
+        batchesEl.innerHTML = renderAuditEmptyState('还没有批次结果。');
+        return;
+    }
+
+    batchesEl.innerHTML = batches.map(batch => {
+        const statusMeta = getFullCheckStatusMeta(batch.status, true);
+        const rangeStart = batch.range_start ?? 0;
+        const rangeEnd = batch.range_end ?? -1;
+        const verdict = batch.final_verdict || 'unknown';
+        const risk = batch.overall_risk || 'unknown';
+        const updatedAt = batch.updated_at ? formatDateTime(batch.updated_at) : '-';
+        const errorHtml = batch.error
+            ? `<div class="full-check-batch-meta">${escapeHtml(batch.error)}</div>`
+            : '';
+        return `
+        <div class="full-check-batch-card">
+            <div class="full-check-batch-top">
+                <div>
+                    <strong>Batch ${batch.batch_index || '-'}</strong>
+                    <div class="full-check-batch-meta">样本 ${rangeStart} - ${rangeEnd} · ${batch.sample_count || 0} 条</div>
+                </div>
+                <div class="audit-round-badges">
+                    ${renderAuditBadge(statusMeta.label, statusMeta.className)}
+                    ${renderAuditBadge(verdict, `verdict-${normalizeAuditToken(verdict)}`)}
+                    ${renderAuditBadge(risk, `risk-${normalizeAuditToken(risk)}`)}
+                </div>
+            </div>
+            <div class="audit-round-stats">
+                <span>issues ${batch.issue_count || 0}</span>
+                <span>fail ${batch.fail_count || 0}</span>
+                <span>borderline ${batch.borderline_count || 0}</span>
+            </div>
+            <div class="full-check-batch-meta">更新时间: ${escapeHtml(updatedAt)}</div>
+            ${errorHtml}
+        </div>`;
+    }).join('');
+}
+
+function renderFullCheckIssues(payload) {
+    const issuesEl = document.getElementById('full-check-issues');
+    const issues = Array.isArray(payload?.issues) ? payload.issues : [];
+    const total = payload?.total ?? issues.length;
+    const totalIssues = fullCheckCache?.summary?.total_issues || 0;
+    const running = Boolean(currentTaskState.running);
+
+    if (!fullCheckCache || !fullCheckCache.exists) {
+        issuesEl.innerHTML = renderAuditEmptyState(payload?.error || '暂无问题结果。');
+        updateFullCheckSelectionCount();
+        return;
+    }
+
+    if (issues.length === 0) {
+        issuesEl.innerHTML = renderAuditEmptyState(payload?.error || '当前筛选下没有问题。');
+        updateFullCheckSelectionCount();
+        return;
+    }
+
+    const metaLine = `
+        <div class="full-check-batch-meta">
+            当前筛选 ${issues.length} / ${total} 条，问题总数 ${totalIssues}
+        </div>`;
+
+    issuesEl.innerHTML = metaLine + issues.map(issue => {
+        const selected = fullCheckSelected.has(issue.sample_id);
+        const resolutionStatus = issue.resolution_status || 'pending';
+        const suggestedAction = getSuggestedFullCheckAction(issue);
+        const suggestedLabel = getSuggestedActionLabel(issue);
+        const suggestedDisabled = running || !suggestedAction;
+        const actionDisabled = running ? 'disabled' : '';
+        const suggestedDisabledAttr = suggestedDisabled ? 'disabled' : '';
+        const resolutionMessage = issue.resolution_message
+            ? `<div class="full-check-issue-path">处理信息: ${escapeHtml(issue.resolution_message)}</div>`
+            : '';
+        return `
+        <div class="full-check-issue-card ${selected ? 'selected' : ''}" data-full-check-card="${issue.sample_id}">
+            <div class="full-check-issue-main">
+                <div class="full-check-issue-select">
+                    <input
+                        type="checkbox"
+                        ${selected ? 'checked' : ''}
+                        onchange="toggleFullCheckSelection('${issue.sample_id}', this.checked)"
+                    >
+                </div>
+                <div class="full-check-issue-content">
+                    <div class="full-check-issue-top">
+                        <div class="full-check-issue-status">
+                            ${renderAuditBadge(issue.verdict || 'unknown', `verdict-${normalizeAuditToken(issue.verdict || 'unknown')}`)}
+                            ${renderResolutionBadge(resolutionStatus)}
+                            ${renderRecommendedActionBadge(issue.recommended_action)}
+                            ${renderSourceBadge(issue.source_type || '-')}
+                        </div>
+                        <div class="full-check-issue-meta">
+                            #${issue.dataset_index ?? '-'} · batch ${issue.batch_index ?? '-'} · ${escapeHtml(formatDateTime(issue.batch_updated_at || issue.resolution_updated_at))}
+                        </div>
+                    </div>
+                    <div class="full-check-issue-text">${escapeHtml(issue.utterance || '')}</div>
+                    <div class="full-check-issue-summary">${escapeHtml(issue.issue_summary || issue.reason || '未提供摘要')}</div>
+                    <div class="full-check-issue-compare">
+                        ${renderFullCheckCompareBox('当前', issue.current_label, issue.current_command_id, issue.current_slots)}
+                        ${renderFullCheckCompareBox('期望', issue.expected_label, issue.expected_command_id, issue.expected_slots)}
+                    </div>
+                    <div class="full-check-issue-path">${escapeHtml(`${issue.source_file || '-'}:${issue.source_line_number || '-'}`)}</div>
+                    ${resolutionMessage}
+                    <div class="full-check-issue-actions">
+                        <button class="btn btn-sm btn-outline" type="button" onclick="viewFullCheckIssue('${issue.sample_id}')">详情</button>
+                        <button class="btn btn-sm btn-primary" type="button" onclick="applySuggestedFullCheckAction('${issue.sample_id}')" ${suggestedDisabledAttr}>${escapeHtml(suggestedLabel)}</button>
+                        <button class="btn btn-sm btn-outline" type="button" onclick="applyFullCheckAction('${issue.sample_id}', 'delete_sample')" ${actionDisabled}>删除样本</button>
+                        <button class="btn btn-sm btn-outline" type="button" onclick="applyFullCheckAction('${issue.sample_id}', 'ignore')" ${actionDisabled}>忽略</button>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    }).join('');
+
+    updateFullCheckSelectionCount();
+}
+
+function toggleFullCheckSelection(sampleId, checked) {
+    if (checked) {
+        fullCheckSelected.add(sampleId);
+    } else {
+        fullCheckSelected.delete(sampleId);
+    }
+    const card = document.querySelector(`[data-full-check-card="${sampleId}"]`);
+    if (card) {
+        card.classList.toggle('selected', checked);
+    }
+    updateFullCheckSelectionCount();
+}
+
+function updateFullCheckSelectionCount() {
+    const countEl = document.getElementById('full-check-selection-count');
+    const btnApply = document.getElementById('btn-full-check-apply-selected');
+    const btnIgnore = document.getElementById('btn-full-check-ignore-selected');
+    const count = fullCheckSelected.size;
+
+    if (countEl) {
+        countEl.textContent = `已选 ${count} 条`;
+    }
+    if (btnApply) {
+        btnApply.disabled = count === 0 || currentTaskState.running;
+    }
+    if (btnIgnore) {
+        btnIgnore.disabled = count === 0 || currentTaskState.running;
+    }
+}
+
+function syncFullCheckPolling() {
+    const shouldPoll = currentTaskState.running && currentTaskState.task_type === 'full_data_check';
+    if (shouldPoll) {
+        if (!fullCheckPollTimer) {
+            loadFullCheckData().catch(err => console.warn('轮询全部数据检查失败:', err));
+            fullCheckPollTimer = window.setInterval(() => {
+                loadFullCheckData().catch(err => console.warn('轮询全部数据检查失败:', err));
+            }, 4000);
+        }
+        return;
+    }
+
+    if (fullCheckPollTimer) {
+        window.clearInterval(fullCheckPollTimer);
+        fullCheckPollTimer = null;
+    }
+}
+
+function findFullCheckIssue(sampleId) {
+    return fullCheckIssuesCache.find(item => item.sample_id === sampleId) || null;
+}
+
+function viewFullCheckIssue(sampleId) {
+    const issue = findFullCheckIssue(sampleId);
+    if (!issue) {
+        alert('未找到问题详情，请先刷新列表。');
+        return;
+    }
+    openModal(`全部数据检查 · #${issue.dataset_index ?? '-'}`, buildFullCheckIssueModal(issue));
+}
+
+function buildFullCheckIssueModal(issue) {
+    const issues = Array.isArray(issue.issues) ? issue.issues : [];
+    const systemicFindings = Array.isArray(issue.systemic_findings) ? issue.systemic_findings : [];
+    const issueDetailsHtml = issues.length > 0
+        ? issues.map(item => `
+            <div class="audit-finding">
+                <div class="audit-finding-top">
+                    ${renderAuditBadge(item.severity || item.type || 'issue', `risk-${normalizeAuditToken(item.severity || 'unknown')}`)}
+                    <strong>${escapeHtml(item.type || 'issue')}</strong>
+                </div>
+                <p>${escapeHtml(item.detail || '无')}</p>
+            </div>
+        `).join('')
+        : '<div class="audit-empty-inline">当前样本没有细分 issues。</div>';
+
+    const findingsHtml = systemicFindings.length > 0
+        ? systemicFindings.map(item => `
+            <div class="audit-finding">
+                <div class="audit-finding-top">
+                    ${renderAuditBadge(item.severity || 'unknown', `risk-${normalizeAuditToken(item.severity || 'unknown')}`)}
+                    <strong>${escapeHtml(item.title || '未命名问题')}</strong>
+                </div>
+                <p>${escapeHtml(item.why_it_matters || '')}</p>
+                <p>${escapeHtml(item.detail || '')}</p>
+                <p class="audit-finding-fix">建议: ${escapeHtml(item.fix_suggestion || '无')}</p>
+            </div>
+        `).join('')
+        : '<div class="audit-empty-inline">当前批次没有系统性问题。</div>';
+
+    return `
+    <div class="audit-modal-section">
+        <div class="audit-modal-meta">
+            样本 #${issue.dataset_index ?? '-'} | ${escapeHtml(issue.source_file || '-')}:${escapeHtml(String(issue.source_line_number || '-'))} | 更新时间: ${escapeHtml(formatDateTime(issue.batch_updated_at || issue.resolution_updated_at))}
+        </div>
+        <div class="audit-detail-grid">
+            <div class="audit-detail-card">
+                <div class="audit-detail-label">Verdict</div>
+                <div class="audit-detail-value">${renderAuditBadge(issue.verdict || 'unknown', `verdict-${normalizeAuditToken(issue.verdict || 'unknown')}`)}</div>
+            </div>
+            <div class="audit-detail-card">
+                <div class="audit-detail-label">处理状态</div>
+                <div class="audit-detail-value">${renderResolutionBadge(issue.resolution_status || 'pending')}</div>
+            </div>
+            <div class="audit-detail-card">
+                <div class="audit-detail-label">建议动作</div>
+                <div class="audit-detail-value">${renderRecommendedActionBadge(issue.recommended_action)}</div>
+            </div>
+            <div class="audit-detail-card">
+                <div class="audit-detail-label">来源</div>
+                <div class="audit-detail-value">${renderSourceBadge(issue.source_type || '-')}</div>
+            </div>
+        </div>
+    </div>
+    <div class="audit-modal-section">
+        <h4>文本与标签</h4>
+        <div class="full-check-issue-text">${escapeHtml(issue.utterance || '')}</div>
+        <div class="full-check-issue-compare">
+            ${renderFullCheckCompareBox('当前', issue.current_label, issue.current_command_id, issue.current_slots)}
+            ${renderFullCheckCompareBox('期望', issue.expected_label, issue.expected_command_id, issue.expected_slots)}
+        </div>
+    </div>
+    <div class="audit-modal-section">
+        <h4>问题说明</h4>
+        <div class="audit-finding">
+            <div class="audit-finding-top">
+                <strong>${escapeHtml(issue.issue_summary || '未提供摘要')}</strong>
+            </div>
+            <p>${escapeHtml(issue.reason || '无')}</p>
+            <p class="audit-finding-fix">建议: ${escapeHtml(issue.fix_suggestion || '无')}</p>
+            ${issue.resolution_message ? `<p class="audit-finding-fix">处理信息: ${escapeHtml(issue.resolution_message)}</p>` : ''}
+        </div>
+    </div>
+    <div class="audit-modal-section">
+        <h4>细分 Issues</h4>
+        <div class="audit-findings">${issueDetailsHtml}</div>
+    </div>
+    <div class="audit-modal-section">
+        <h4>批次系统问题</h4>
+        <div class="audit-findings">${findingsHtml}</div>
+    </div>`;
+}
+
+async function applySuggestedFullCheckAction(sampleId) {
+    const issue = findFullCheckIssue(sampleId);
+    if (!issue) {
+        alert('未找到问题，请刷新后重试。');
+        return;
+    }
+
+    const action = getSuggestedFullCheckAction(issue);
+    if (!action) {
+        const message = issue.recommended_action === 'keep'
+            ? '该问题的建议动作是 keep，没有可直接回写的修改。'
+            : '该问题缺少可安全回写的期望内容，建议手动删除或忽略。';
+        alert(message);
+        return;
+    }
+
+    const response = await submitFullCheckActions([{ sample_id: sampleId, action }]);
+    if (response && response.status === 'partial') {
+        alert('处理部分成功，存在冲突，请刷新后重试。');
+    }
+}
+
+async function applyFullCheckAction(sampleId, action) {
+    const response = await submitFullCheckActions([{ sample_id: sampleId, action }]);
+    if (response && response.status === 'partial') {
+        alert('处理部分成功，存在冲突，请刷新后重试。');
+    }
+}
+
+async function applySelectedFullCheckAction(mode) {
+    const selectedIds = [...fullCheckSelected];
+    if (selectedIds.length === 0) {
+        alert('请先选择要处理的问题。');
+        return;
+    }
+
+    const actions = [];
+    const skipped = [];
+    selectedIds.forEach(sampleId => {
+        const issue = findFullCheckIssue(sampleId);
+        if (!issue) {
+            skipped.push(sampleId);
+            return;
+        }
+
+        let action = mode;
+        if (mode === 'apply_expected') {
+            action = getSuggestedFullCheckAction(issue);
+            if (!action) {
+                skipped.push(sampleId);
+                return;
+            }
+        }
+
+        actions.push({ sample_id: sampleId, action });
+    });
+
+    if (actions.length === 0) {
+        alert('所选问题没有可执行的动作。');
+        return;
+    }
+
+    const response = await submitFullCheckActions(actions);
+    if (!response) {
+        return;
+    }
+
+    const conflicts = Array.isArray(response.results)
+        ? response.results.filter(item => item.status === 'conflict').length
+        : 0;
+    if (skipped.length > 0 || conflicts > 0) {
+        const parts = [];
+        if (actions.length - conflicts > 0) {
+            parts.push(`已处理 ${actions.length - conflicts} 条`);
+        }
+        if (skipped.length > 0) {
+            parts.push(`跳过 ${skipped.length} 条无可执行建议的项`);
+        }
+        if (conflicts > 0) {
+            parts.push(`冲突 ${conflicts} 条`);
+        }
+        alert(parts.join('，'));
+    }
+}
+
+async function submitFullCheckActions(actions) {
+    if (currentTaskState.running) {
+        alert('当前有任务在运行，暂时不能处理检查结果。');
+        return null;
+    }
+
+    const game = document.getElementById('cfg-game').value;
+    try {
+        const response = await apiPost(`/api/full-check/${encodeURIComponent(game)}/actions/apply`, {
+            actions,
+        });
+        const handledIds = new Set(actions.map(item => item.sample_id));
+        fullCheckSelected = new Set([...fullCheckSelected].filter(sampleId => !handledIds.has(sampleId)));
+        updateFullCheckSelectionCount();
+        await Promise.allSettled([
+            loadFullCheckData(true),
+            loadStats(),
+            loadOutputData(),
+        ]);
+        return response;
+    } catch (e) {
+        alert('处理失败: ' + e.message);
+        return null;
     }
 }
 
@@ -1448,6 +2061,125 @@ async function runValidate() {
 
 function escapeHtml(str) {
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = str == null ? '' : String(str);
     return div.innerHTML;
+}
+
+function getFullCheckStatusMeta(status, hasData = false) {
+    const normalized = normalizeAuditToken(status || '');
+    if (normalized === 'completed') {
+        return { label: 'completed', className: 'verdict-completed' };
+    }
+    if (normalized === 'completed-with-errors') {
+        return { label: 'partial', className: 'verdict-partial' };
+    }
+    if (normalized === 'running') {
+        return { label: 'running', className: 'verdict-available' };
+    }
+    if (normalized === 'error') {
+        return { label: 'error', className: 'verdict-fail' };
+    }
+    if (normalized === 'empty') {
+        return { label: 'empty', className: 'verdict-none' };
+    }
+    if (hasData) {
+        return { label: 'available', className: 'verdict-available' };
+    }
+    return { label: 'none', className: 'verdict-none' };
+}
+
+function getResolutionMeta(status) {
+    const normalized = normalizeAuditToken(status || 'pending');
+    if (normalized === 'applied') {
+        return { label: 'applied', className: 'resolution-applied' };
+    }
+    if (normalized === 'ignored') {
+        return { label: 'ignored', className: 'resolution-ignored' };
+    }
+    if (normalized === 'conflict') {
+        return { label: 'conflict', className: 'resolution-conflict' };
+    }
+    return { label: 'pending', className: 'resolution-pending' };
+}
+
+function getRecommendedActionMeta(action) {
+    const normalized = normalizeAuditToken(action || 'keep');
+    if (normalized === 'apply-expected') {
+        return { label: 'apply_expected', className: 'verdict-partial' };
+    }
+    if (normalized === 'delete-sample') {
+        return { label: 'delete_sample', className: 'verdict-fail' };
+    }
+    return { label: 'keep', className: 'verdict-pass' };
+}
+
+function renderResolutionBadge(status) {
+    const meta = getResolutionMeta(status);
+    return `<span class="audit-badge ${meta.className}">${escapeHtml(meta.label)}</span>`;
+}
+
+function renderRecommendedActionBadge(action) {
+    const meta = getRecommendedActionMeta(action);
+    return `<span class="audit-badge ${meta.className}">${escapeHtml(meta.label)}</span>`;
+}
+
+function renderLabelBadge(label) {
+    const safeLabel = String(label || '-');
+    const className = safeLabel === '-' ? '' : ` ${safeLabel}`;
+    return `<span class="label-badge${className}">${escapeHtml(safeLabel)}</span>`;
+}
+
+function renderSourceBadge(sourceType) {
+    return `<span class="source-badge">${escapeHtml(String(sourceType || '-'))}</span>`;
+}
+
+function formatSlotsHtml(slots) {
+    const entries = Object.entries(slots || {}).filter(([, value]) => value != null && String(value) !== '');
+    if (entries.length === 0) {
+        return '-';
+    }
+    return entries.map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(String(value))}`).join('<br>');
+}
+
+function renderFullCheckCompareBox(title, label, commandId, slots) {
+    return `
+    <div class="full-check-issue-box">
+        <div class="full-check-issue-box-label">${escapeHtml(title)}</div>
+        <div class="full-check-issue-box-value">
+            ${renderLabelBadge(label || '-')}
+            <div class="mono">${escapeHtml(commandId || '-')}</div>
+            <div class="slots-display">${formatSlotsHtml(slots)}</div>
+        </div>
+    </div>`;
+}
+
+function getSuggestedFullCheckAction(issue) {
+    const action = issue?.recommended_action || 'keep';
+    if (action === 'keep') {
+        return '';
+    }
+    if (action === 'apply_expected' && issue?.source_type === 'global_negative') {
+        return '';
+    }
+    if (action === 'apply_expected' && !issue?.can_apply_expected) {
+        return '';
+    }
+    return action;
+}
+
+function getSuggestedActionLabel(issue) {
+    const action = issue?.recommended_action || 'keep';
+    if (action === 'delete_sample') {
+        return '按建议删除';
+    }
+    if (action === 'apply_expected' && issue?.source_type === 'global_negative') {
+        return '请删除或忽略';
+    }
+    if (action === 'apply_expected' && !issue?.can_apply_expected) {
+        return '无法应用建议';
+    }
+    if (action === 'apply_expected') {
+        return '应用建议';
+    }
+    return '建议保留';
 }
