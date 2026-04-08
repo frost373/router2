@@ -15,11 +15,11 @@ import urllib.request
 LOG_SEPARATOR = "=" * 80
 _CONFIG_CACHE = None
 _DEFAULT_MODEL = "deepseek-v3.2"
-_DEFAULT_MAX_TOKENS = 8192
+_DEFAULT_MAX_TOKENS = 32000
 _JSON_RETRY_MAX_TOKENS = 32000
 _THINKING_MAX_TOKENS = {
-    "low": 12000,
-    "medium": 20000,
+    "low": 18000,
+    "medium": 24000,
     "high": 32000,
 }
 

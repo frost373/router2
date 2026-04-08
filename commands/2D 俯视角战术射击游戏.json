@@ -1,0 +1,223 @@
+{
+"commands": [
+{
+"command_id": "ATTACK_TARGET",
+"desc": "命令AI队友立即对指定目标进行攻击。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"打{target}",
+"攻击{target}",
+"先干掉{target}",
+"集火{target}"
+]
+},
+{
+"command_id": "SUPPRESS_TARGET",
+"desc": "命令AI队友对指定目标持续进行压制射击。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"压住{target}",
+"火力压制{target}",
+"给{target}上压制",
+"别让{target}冒头"
+]
+},
+{
+"command_id": "CEASE_FIRE",
+"desc": "命令AI队友立即停止开火并保持停火状态。",
+"slots": [],
+"aliases": [
+"停火",
+"别开枪",
+"先别打",
+"收火"
+]
+},
+{
+"command_id": "OPEN_FIRE",
+"desc": "命令AI队友解除停火并立即自由开火攻击敌人。",
+"slots": [],
+"aliases": [
+"开火",
+"自由开火",
+"看到人就打",
+"直接打"
+]
+},
+{
+"command_id": "FOLLOW_ME",
+"desc": "命令AI队友跟随玩家移动并保持贴近。",
+"slots": [],
+"aliases": [
+"跟着我",
+"跟我走",
+"跟上",
+"别掉队"
+]
+},
+{
+"command_id": "HOLD_POSITION",
+"desc": "命令AI队友停留在当前位置并原地驻守。",
+"slots": [],
+"aliases": [
+"原地别动",
+"守在这",
+"站这别跑",
+"就地驻守"
+]
+},
+{
+"command_id": "MOVE_TO_TARGET",
+"desc": "命令AI队友立即移动到指定目标位置或对象附近。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"去{target}",
+"到{target}去",
+"移动到{target}",
+"赶到{target}"
+]
+},
+{
+"command_id": "DEFEND_TARGET",
+"desc": "命令AI队友前往并防守指定目标区域或对象。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"守住{target}",
+"防守{target}",
+"看住{target}",
+"别让人靠近{target}"
+]
+},
+{
+"command_id": "WATCH_TARGET",
+"desc": "命令AI队友瞄住并盯防指定方向、入口或目标点位。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"盯着{target}",
+"看住{target}",
+"架住{target}",
+"瞄着{target}"
+]
+},
+{
+"command_id": "FALL_BACK",
+"desc": "命令AI队友立即脱离当前交战并撤回玩家身边。",
+"slots": [],
+"aliases": [
+"撤回来",
+"退回来",
+"回我这",
+"先撤"
+]
+},
+{
+"command_id": "COVER_ME",
+"desc": "命令AI队友优先掩护玩家并为玩家提供火力保护。",
+"slots": [],
+"aliases": [
+"掩护我",
+"给我打掩护",
+"看着我点",
+"护着我"
+]
+},
+{
+"command_id": "TAKE_COVER",
+"desc": "命令AI队友立即寻找并进入掩体保护自己。",
+"slots": [],
+"aliases": [
+"找掩体",
+"先进掩体",
+"躲起来",
+"去掩体后面"
+]
+},
+{
+"command_id": "REVIVE_TARGET",
+"desc": "命令AI队友立即救起或扶起指定倒地目标。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"救{target}",
+"拉{target}起来",
+"扶{target}",
+"快救下{target}"
+]
+},
+{
+"command_id": "USE_ON_TARGET",
+"desc": "命令AI队友使用指定技能、武器或道具作用于指定目标。",
+"slots": [
+{"name": "use", "required": true, "type": "use_span"},
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"对{target}用{use}",
+"用{use}打{target}",
+"把{use}给{target}",
+"拿{use}处理{target}"
+]
+},
+{
+"command_id": "USE_ABILITY",
+"desc": "命令AI队友立即使用指定技能、武器模式或道具。",
+"slots": [
+{"name": "use", "required": true, "type": "use_span"}
+],
+"aliases": [
+"开{use}",
+"用{use}",
+"放{use}",
+"马上上{use}"
+]
+},
+{
+"command_id": "PICK_UP_TARGET",
+"desc": "命令AI队友立即拾取或拿取指定目标物品。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"拿{target}",
+"把{target}捡起来",
+"去拿{target}",
+"把{target}带上"
+]
+},
+{
+"command_id": "INTERACT_TARGET",
+"desc": "命令AI队友立即操作指定场景目标或任务物件。",
+"slots": [
+{"name": "target", "required": true, "type": "target_span"}
+],
+"aliases": [
+"开{target}",
+"操作{target}",
+"去用{target}",
+"处理{target}"
+]
+},
+{
+"command_id": "RELOAD",
+"desc": "命令AI队友立即进行装填并补满当前武器弹药。",
+"slots": [],
+"aliases": [
+"换弹",
+"补弹",
+"赶紧上弹",
+"先装弹"
+]
+}
+]
+}
