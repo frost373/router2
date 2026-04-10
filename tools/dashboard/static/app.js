@@ -39,6 +39,15 @@ const DEFAULT_FULL_CHECK_TASK = {
         { index: 2, name: '汇总结果' },
     ],
 };
+const DEFAULT_FULL_CHECK_REVIEW_TASK = {
+    task_type: 'full_check_issue_review',
+    task_name: '问题样本复核',
+    steps: [
+        { index: 0, name: '准备复核' },
+        { index: 1, name: '逐条复核' },
+        { index: 2, name: '汇总结果' },
+    ],
+};
 
 // ── 全局状态 ───────────────────────────────────────────────
 let config = null;           // 后端配置
@@ -216,6 +225,7 @@ async function loadConfig() {
         if (config.defaults.model) {
             modelSelect.value = config.defaults.model;
         }
+        syncFullCheckReviewSecondaryModelOptions();
         if (config.defaults.template_count != null) {
             document.getElementById('cfg-template').value = config.defaults.template_count;
         }
@@ -266,11 +276,15 @@ async function loadConfig() {
         thinkModeToggle.addEventListener('change', () => {
             thinkLevelGroup.style.display = thinkModeToggle.checked ? 'block' : 'none';
         });
+        modelSelect.addEventListener('change', () => {
+            syncFullCheckReviewSecondaryModelOptions();
+        });
 
         // 绑定按钮
         document.getElementById('btn-generate').addEventListener('click', startGenerate);
         document.getElementById('btn-generate-audit').addEventListener('click', startQualityAudit);
         document.getElementById('btn-generate-full-check').addEventListener('click', startFullCheck);
+        document.getElementById('btn-full-check-review').addEventListener('click', startFullCheckIssueReview);
         document.getElementById('btn-generate-global').addEventListener('click', startGlobalNegatives);
         document.getElementById('btn-stop').addEventListener('click', stopCurrentTask);
         document.getElementById('btn-validate').addEventListener('click', runValidate);
@@ -289,6 +303,46 @@ async function loadConfig() {
 
     } catch (e) {
         console.error('加载配置失败:', e);
+    }
+}
+
+function syncFullCheckReviewSecondaryModelOptions() {
+    const secondarySelect = document.getElementById('cfg-full-check-review-secondary-model');
+    const reviewButton = document.getElementById('btn-full-check-review');
+    const primaryModel = document.getElementById('cfg-model')?.value || '';
+    const preferredSecondary = config?.defaults?.secondary_model || '';
+    const currentSecondary = secondarySelect?.value || '';
+    const secondaryModels = Array.isArray(config?.models)
+        ? config.models.filter(model => model && model !== primaryModel)
+        : [];
+
+    if (!secondarySelect) {
+        return;
+    }
+
+    secondarySelect.innerHTML = '';
+    if (secondaryModels.length === 0) {
+        secondarySelect.add(new Option('无可用副模型', ''));
+        secondarySelect.value = '';
+        secondarySelect.disabled = true;
+        if (reviewButton) {
+            reviewButton.disabled = true;
+            reviewButton.title = '至少需要两个不同模型才能自动复核';
+        }
+        return;
+    }
+
+    secondaryModels.forEach(model => {
+        secondarySelect.add(new Option(model, model));
+    });
+    const nextValue = secondaryModels.includes(currentSecondary)
+        ? currentSecondary
+        : (secondaryModels.includes(preferredSecondary) ? preferredSecondary : secondaryModels[0]);
+    secondarySelect.disabled = false;
+    secondarySelect.value = nextValue;
+    if (reviewButton) {
+        reviewButton.disabled = false;
+        reviewButton.title = '';
     }
 }
 
@@ -408,6 +462,44 @@ async function startFullCheck() {
     }
 }
 
+async function startFullCheckIssueReview() {
+    const primaryModel = document.getElementById('cfg-model').value || null;
+    const secondaryModel = document.getElementById('cfg-full-check-review-secondary-model').value || null;
+    if (!primaryModel) {
+        alert('请选择问题样本复核的主模型。');
+        return;
+    }
+    if (!secondaryModel) {
+        alert('请选择问题样本复核的副模型。');
+        return;
+    }
+    if (primaryModel === secondaryModel) {
+        alert('问题样本复核要求主模型和副模型不同。');
+        return;
+    }
+
+    const params = {
+        game: document.getElementById('cfg-game').value,
+        model: primaryModel,
+        secondary_model: secondaryModel,
+        think_mode: document.getElementById('cfg-think-mode').checked,
+        think_level: document.getElementById('cfg-think-level').value,
+        restart: document.getElementById('cfg-full-check-review-restart').checked,
+    };
+
+    try {
+        clearLogs();
+        await apiPost('/api/full-check/review/run', params);
+        setTaskState(buildFullCheckReviewTaskPreview());
+        setRunningState(true, '问题样本复核');
+
+        document.querySelector('[data-tab="progress"]').click();
+        activateProgressTab('log');
+    } catch (e) {
+        alert('启动失败: ' + e.message);
+    }
+}
+
 async function startGlobalNegatives() {
     const params = {
         game: document.getElementById('cfg-game').value,
@@ -446,8 +538,10 @@ async function syncTaskState() {
         if (state.running) {
             setRunningState(true, state.task_name);
         } else if (state.error) {
+            setRunningState(false, state.task_name);
             setStatusError(state.task_name);
         } else if (state.finished) {
+            setRunningState(false, state.task_name);
             setStatusDone(state.task_name);
         } else {
             setRunningState(false);
@@ -501,11 +595,14 @@ function handleSSEEvent(data) {
             break;
         case 'step':
             setTaskState(data);
-            if (data.statuses) {
+            if (data.running && data.statuses) {
                 // 如果有 running 状态则标记运行中
                 if (data.statuses.some(s => s === 'running')) {
                     setRunningState(true, data.task_name);
                 }
+            }
+            if (!data.running && (data.error || data.finished || data.stopped)) {
+                setRunningState(false, data.task_name);
             }
             break;
         case 'done':
@@ -515,7 +612,7 @@ function handleSSEEvent(data) {
             refreshAfterTaskCompletion(data.task_type);
             if (data.task_type === 'quality_audit') {
                 activateProgressTab('audit');
-            } else if (data.task_type === 'full_data_check') {
+            } else if (data.task_type === 'full_data_check' || data.task_type === 'full_check_issue_review') {
                 activateProgressTab('full-check');
             }
             break;
@@ -546,6 +643,7 @@ function setRunningState(running, taskName = currentTaskState.task_name) {
     const btnMain = document.getElementById('btn-generate');
     const btnAudit = document.getElementById('btn-generate-audit');
     const btnFullCheck = document.getElementById('btn-generate-full-check');
+    const btnFullCheckReview = document.getElementById('btn-full-check-review');
     const btnGlobal = document.getElementById('btn-generate-global');
     const btnStop = document.getElementById('btn-stop');
     currentTaskState.running = running;
@@ -556,6 +654,7 @@ function setRunningState(running, taskName = currentTaskState.task_name) {
         btnMain.disabled = true;
         btnAudit.disabled = true;
         btnFullCheck.disabled = true;
+        btnFullCheckReview.disabled = true;
         btnGlobal.disabled = true;
         btnStop.classList.remove('hidden');
     } else {
@@ -564,6 +663,7 @@ function setRunningState(running, taskName = currentTaskState.task_name) {
         btnMain.disabled = false;
         btnAudit.disabled = false;
         btnFullCheck.disabled = false;
+        btnFullCheckReview.disabled = false;
         btnGlobal.disabled = false;
         btnStop.classList.add('hidden');
     }
@@ -620,12 +720,22 @@ function buildFullCheckTaskPreview() {
     });
 }
 
+function buildFullCheckReviewTaskPreview() {
+    return normalizeTaskState({
+        ...DEFAULT_FULL_CHECK_REVIEW_TASK,
+        current_step: 0,
+        running: true,
+        statuses: ['running', 'waiting', 'waiting'],
+    });
+}
+
 function normalizeTaskState(data) {
     const fallbackMap = {
         main_pipeline: DEFAULT_MAIN_TASK,
         global_negative: DEFAULT_GLOBAL_NEGATIVE_TASK,
         quality_audit: DEFAULT_AUDIT_TASK,
         full_data_check: DEFAULT_FULL_CHECK_TASK,
+        full_check_issue_review: DEFAULT_FULL_CHECK_REVIEW_TASK,
     };
     const fallback = fallbackMap[data?.task_type] || DEFAULT_MAIN_TASK;
     const steps = Array.isArray(data?.steps) && data.steps.length > 0
@@ -698,7 +808,7 @@ function updateAuditTaskSummary(data = auditCache) {
     const statusEl = document.getElementById('audit-task-status');
     if (!statusEl) return;
 
-    const summary = data && typeof data.summary === 'object' ? data.summary : {};
+    const summary = data?.summary && typeof data.summary === 'object' ? data.summary : {};
     const derived = data && typeof data.derived_summary === 'object' ? data.derived_summary : {};
     const rounds = Array.isArray(data?.rounds) ? data.rounds : [];
     const roundsRequested = summary.rounds_requested ?? rounds.length ?? 0;
@@ -717,7 +827,7 @@ function updateFullCheckTaskSummary(data = fullCheckCache) {
     const statusEl = document.getElementById('full-check-task-status');
     if (!statusEl) return;
 
-    const summary = data && typeof data.summary === 'object' ? data.summary : {};
+    const summary = data?.summary && typeof data.summary === 'object' ? data.summary : {};
     if (!data || !data.exists || !summary) {
         statusEl.textContent = '未生成';
         return;
@@ -735,7 +845,7 @@ async function refreshAfterTaskCompletion(taskType) {
         jobs.push(loadStats(), loadOutputData());
     } else if (taskType === 'quality_audit') {
         jobs.push(loadAuditData(true));
-    } else if (taskType === 'full_data_check') {
+    } else if (taskType === 'full_data_check' || taskType === 'full_check_issue_review') {
         jobs.push(loadFullCheckData(true));
     }
     await Promise.allSettled(jobs);
@@ -1086,8 +1196,9 @@ function renderFullCheckSection(data) {
     section.classList.remove('hidden');
     updateFullCheckTaskSummary(data);
 
-    const summary = data && typeof data.summary === 'object' ? data.summary : {};
-    const manifest = data && typeof data.manifest === 'object' ? data.manifest : {};
+    const summary = data?.summary && typeof data.summary === 'object' ? data.summary : {};
+    const manifest = data?.manifest && typeof data.manifest === 'object' ? data.manifest : {};
+    const reviewSummary = data?.review_summary && typeof data.review_summary === 'object' ? data.review_summary : {};
     const statusMeta = getFullCheckStatusMeta(summary.status, Boolean(data?.exists));
     const resolutionCounts = summary && typeof summary.resolution_counts === 'object'
         ? summary.resolution_counts
@@ -1112,6 +1223,14 @@ function renderFullCheckSection(data) {
         summary.failed_batches ? `失败批次: ${summary.failed_batches}` : '',
         data.can_resume ? '可继续未完成 / 失败批次' : '',
         data.unresolved_count > 0 ? `待处理: ${data.unresolved_count}` : '',
+        reviewSummary.reviewed_total ? `已复核: ${reviewSummary.reviewed_total}` : '',
+        reviewSummary.auto_processed ? `自动处理: ${reviewSummary.auto_processed}` : '',
+        reviewSummary.pending_confirmation ? `待确认: ${reviewSummary.pending_confirmation}` : '',
+        reviewSummary.dual_model_agree_auto ? `双模一致自动: ${reviewSummary.dual_model_agree_auto}` : '',
+        reviewSummary.dual_model_agree_pending ? `双模一致待确认: ${reviewSummary.dual_model_agree_pending}` : '',
+        reviewSummary.dual_model_disagree ? `双模不一致: ${reviewSummary.dual_model_disagree}` : '',
+        reviewSummary.dual_model_errors ? `模型失败: ${reviewSummary.dual_model_errors}` : '',
+        reviewSummary.apply_conflicts ? `复核冲突: ${reviewSummary.apply_conflicts}` : '',
     ].filter(Boolean).join(' | ');
 
     renderFullCheckBatches(Array.isArray(summary.batches) ? summary.batches : []);
@@ -1188,14 +1307,41 @@ function renderFullCheckIssues(payload) {
     issuesEl.innerHTML = metaLine + issues.map(issue => {
         const selected = fullCheckSelected.has(issue.sample_id);
         const resolutionStatus = issue.resolution_status || 'pending';
-        const suggestedAction = getSuggestedFullCheckAction(issue);
+        const suggestedPayload = buildSuggestedFullCheckActionPayload(issue);
+        const suggestedAction = suggestedPayload ? suggestedPayload.action : '';
         const suggestedLabel = getSuggestedActionLabel(issue);
-        const suggestedDisabled = running || !suggestedAction;
+        const suggestedDisabled = running || !suggestedPayload;
         const actionDisabled = running ? 'disabled' : '';
         const suggestedDisabledAttr = suggestedDisabled ? 'disabled' : '';
         const resolutionMessage = issue.resolution_message
             ? `<div class="full-check-issue-path">处理信息: ${escapeHtml(issue.resolution_message)}</div>`
             : '';
+        const reviewMetaHtml = issue.review_decision
+            ? `
+                ${renderReviewDecisionBadge(issue.review_decision)}
+                ${issue.review_agreement_status ? renderReviewAgreementBadge(issue.review_agreement_status) : ''}
+                ${issue.review_confidence ? renderAuditBadge(issue.review_confidence, `risk-${normalizeAuditToken(issue.review_confidence)}`) : ''}
+                ${issue.review_action && issue.review_action !== 'none' ? renderRecommendedActionBadge(issue.review_action) : ''}
+            `
+            : '';
+        const reviewInfoHtml = issue.review_decision
+            ? `<div class="full-check-issue-path">复核: ${escapeHtml(issue.review_reason || issue.review_pending_reason || '未提供说明')}</div>`
+            : '';
+        const reviewAgreementHtml = issue.review_agreement_status
+            ? `<div class="full-check-issue-path">双模型: ${escapeHtml(getReviewAgreementMeta(issue.review_agreement_status).label)}${issue.review_disagreement_fields?.length ? ` (${escapeHtml(formatReviewDisagreementFields(issue.review_disagreement_fields))})` : ''}</div>`
+            : '';
+        const expectedLabel = issue.review_action === 'apply_expected'
+            ? (issue.review_final_label ?? issue.expected_label)
+            : issue.expected_label;
+        const expectedCommandId = issue.review_action === 'apply_expected'
+            ? (issue.review_final_command_id ?? null)
+            : issue.expected_command_id;
+        const expectedSlots = issue.review_action === 'apply_expected'
+            ? (issue.review_final_slots ?? issue.expected_slots)
+            : issue.expected_slots;
+        const expectedBucket = issue.review_action === 'apply_expected'
+            ? (issue.review_final_bucket ?? null)
+            : null;
         return `
         <div class="full-check-issue-card ${selected ? 'selected' : ''}" data-full-check-card="${issue.sample_id}">
             <div class="full-check-issue-main">
@@ -1212,6 +1358,7 @@ function renderFullCheckIssues(payload) {
                             ${renderAuditBadge(issue.verdict || 'unknown', `verdict-${normalizeAuditToken(issue.verdict || 'unknown')}`)}
                             ${renderResolutionBadge(resolutionStatus)}
                             ${renderRecommendedActionBadge(issue.recommended_action)}
+                            ${reviewMetaHtml}
                             ${renderSourceBadge(issue.source_type || '-')}
                         </div>
                         <div class="full-check-issue-meta">
@@ -1221,10 +1368,12 @@ function renderFullCheckIssues(payload) {
                     <div class="full-check-issue-text">${escapeHtml(issue.utterance || '')}</div>
                     <div class="full-check-issue-summary">${escapeHtml(issue.issue_summary || issue.reason || '未提供摘要')}</div>
                     <div class="full-check-issue-compare">
-                        ${renderFullCheckCompareBox('当前', issue.current_label, issue.current_command_id, issue.current_slots)}
-                        ${renderFullCheckCompareBox('期望', issue.expected_label, issue.expected_command_id, issue.expected_slots)}
+                        ${renderFullCheckCompareBox('当前', issue.current_label, issue.current_command_id, issue.current_slots, issue.current_bucket)}
+                        ${renderFullCheckCompareBox('期望', expectedLabel, expectedCommandId, expectedSlots, expectedBucket)}
                     </div>
                     <div class="full-check-issue-path">${escapeHtml(`${issue.source_file || '-'}:${issue.source_line_number || '-'}`)}</div>
+                    ${reviewInfoHtml}
+                    ${reviewAgreementHtml}
                     ${resolutionMessage}
                     <div class="full-check-issue-actions">
                         <button class="btn btn-sm btn-outline" type="button" onclick="viewFullCheckIssue('${issue.sample_id}')">详情</button>
@@ -1271,7 +1420,8 @@ function updateFullCheckSelectionCount() {
 }
 
 function syncFullCheckPolling() {
-    const shouldPoll = currentTaskState.running && currentTaskState.task_type === 'full_data_check';
+    const shouldPoll = currentTaskState.running
+        && ['full_data_check', 'full_check_issue_review'].includes(currentTaskState.task_type);
     if (shouldPoll) {
         if (!fullCheckPollTimer) {
             loadFullCheckData().catch(err => console.warn('轮询全部数据检查失败:', err));
@@ -1354,12 +1504,18 @@ function buildFullCheckIssueModal(issue) {
             </div>
         </div>
     </div>
-    <div class="audit-modal-section">
-        <h4>文本与标签</h4>
+        <div class="audit-modal-section">
+            <h4>文本与标签</h4>
         <div class="full-check-issue-text">${escapeHtml(issue.utterance || '')}</div>
         <div class="full-check-issue-compare">
-            ${renderFullCheckCompareBox('当前', issue.current_label, issue.current_command_id, issue.current_slots)}
-            ${renderFullCheckCompareBox('期望', issue.expected_label, issue.expected_command_id, issue.expected_slots)}
+            ${renderFullCheckCompareBox('当前', issue.current_label, issue.current_command_id, issue.current_slots, issue.current_bucket)}
+            ${renderFullCheckCompareBox(
+                '期望',
+                issue.review_action === 'apply_expected' ? (issue.review_final_label ?? issue.expected_label) : issue.expected_label,
+                issue.review_action === 'apply_expected' ? (issue.review_final_command_id ?? null) : issue.expected_command_id,
+                issue.review_action === 'apply_expected' ? (issue.review_final_slots ?? issue.expected_slots) : issue.expected_slots,
+                issue.review_action === 'apply_expected' ? (issue.review_final_bucket ?? null) : null,
+            )}
         </div>
     </div>
     <div class="audit-modal-section">
@@ -1371,6 +1527,24 @@ function buildFullCheckIssueModal(issue) {
             <p>${escapeHtml(issue.reason || '无')}</p>
             <p class="audit-finding-fix">建议: ${escapeHtml(issue.fix_suggestion || '无')}</p>
             ${issue.resolution_message ? `<p class="audit-finding-fix">处理信息: ${escapeHtml(issue.resolution_message)}</p>` : ''}
+        </div>
+    </div>
+    <div class="audit-modal-section">
+        <h4>Agent 复核</h4>
+        <div class="audit-finding">
+            <div class="audit-finding-top">
+                ${issue.review_decision ? renderReviewDecisionBadge(issue.review_decision) : renderAuditBadge('none', 'risk-unknown')}
+                ${issue.review_agreement_status ? renderReviewAgreementBadge(issue.review_agreement_status) : ''}
+                ${issue.review_confidence ? renderAuditBadge(issue.review_confidence, `risk-${normalizeAuditToken(issue.review_confidence)}`) : ''}
+                ${issue.review_action && issue.review_action !== 'none' ? renderRecommendedActionBadge(issue.review_action) : ''}
+            </div>
+            <p>${escapeHtml(issue.review_reason || issue.review_pending_reason || '尚未执行复核')}</p>
+            ${issue.review_disagreement_fields?.length ? `<p class="audit-finding-fix">冲突字段: ${escapeHtml(formatReviewDisagreementFields(issue.review_disagreement_fields))}</p>` : ''}
+            ${issue.review_execution_message ? `<p class="audit-finding-fix">执行信息: ${escapeHtml(issue.review_execution_message)}</p>` : ''}
+        </div>
+        <div class="audit-findings">
+            ${renderSingleModelReview('主模型', issue.review_primary_result)}
+            ${renderSingleModelReview('副模型', issue.review_secondary_result)}
         </div>
     </div>
     <div class="audit-modal-section">
@@ -1390,16 +1564,16 @@ async function applySuggestedFullCheckAction(sampleId) {
         return;
     }
 
-    const action = getSuggestedFullCheckAction(issue);
-    if (!action) {
-        const message = issue.recommended_action === 'keep'
+    const payload = buildSuggestedFullCheckActionPayload(issue);
+    if (!payload) {
+        const message = (issue.review_decision === 'pending_confirmation' || issue.recommended_action === 'keep')
             ? '该问题的建议动作是 keep，没有可直接回写的修改。'
             : '该问题缺少可安全回写的期望内容，建议手动删除或忽略。';
         alert(message);
         return;
     }
 
-    const response = await submitFullCheckActions([{ sample_id: sampleId, action }]);
+    const response = await submitFullCheckActions([payload]);
     if (response && response.status === 'partial') {
         alert('处理部分成功，存在冲突，请刷新后重试。');
     }
@@ -1430,11 +1604,13 @@ async function applySelectedFullCheckAction(mode) {
 
         let action = mode;
         if (mode === 'apply_expected') {
-            action = getSuggestedFullCheckAction(issue);
-            if (!action) {
+            const payload = buildSuggestedFullCheckActionPayload(issue);
+            if (!payload) {
                 skipped.push(sampleId);
                 return;
             }
+            actions.push(payload);
+            return;
         }
 
         actions.push({ sample_id: sampleId, action });
@@ -2141,45 +2317,171 @@ function formatSlotsHtml(slots) {
     return entries.map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(String(value))}`).join('<br>');
 }
 
-function renderFullCheckCompareBox(title, label, commandId, slots) {
+function getReviewDecisionMeta(decision) {
+    const normalized = normalizeAuditToken(decision || 'pending_confirmation');
+    if (normalized === 'auto-process') {
+        return { label: 'auto_process', className: 'verdict-pass' };
+    }
+    return { label: 'pending_confirmation', className: 'verdict-borderline' };
+}
+
+function renderReviewDecisionBadge(decision) {
+    const meta = getReviewDecisionMeta(decision);
+    return `<span class="audit-badge ${meta.className}">${escapeHtml(meta.label)}</span>`;
+}
+
+function getReviewAgreementMeta(status) {
+    const normalized = normalizeAuditToken(status || '');
+    if (normalized === 'agreed_auto_process') {
+        return { label: '双模一致自动', className: 'verdict-pass' };
+    }
+    if (normalized === 'agreed_pending_confirmation') {
+        return { label: '双模一致待确认', className: 'verdict-borderline' };
+    }
+    if (normalized === 'mismatch') {
+        return { label: '双模不一致', className: 'verdict-fail' };
+    }
+    if (['primary_error', 'secondary_error', 'both_error'].includes(normalized)) {
+        return { label: '模型失败', className: 'verdict-fail' };
+    }
+    return { label: '未复核', className: 'risk-unknown' };
+}
+
+function renderReviewAgreementBadge(status) {
+    const meta = getReviewAgreementMeta(status);
+    return `<span class="audit-badge ${meta.className}">${escapeHtml(meta.label)}</span>`;
+}
+
+function formatReviewDisagreementFields(fields) {
+    return Array.isArray(fields) && fields.length > 0
+        ? fields.join(', ')
+        : '无';
+}
+
+function renderSingleModelReview(title, detail) {
+    if (!detail) {
+        return `
+        <div class="audit-finding">
+            <div class="audit-finding-top">
+                ${renderAuditBadge(title, 'risk-unknown')}
+            </div>
+            <p>未执行该模型复核。</p>
+        </div>`;
+    }
+    const notes = Array.isArray(detail.safety_notes) && detail.safety_notes.length > 0
+        ? `<p class="audit-finding-fix">安全备注: ${escapeHtml(detail.safety_notes.join(' | '))}</p>`
+        : '';
+    const demotion = detail.demotion_reason
+        ? `<p class="audit-finding-fix">降级原因: ${escapeHtml(detail.demotion_reason)}</p>`
+        : '';
+    const error = detail.error_message
+        ? `<p class="audit-finding-fix">模型错误: ${escapeHtml(detail.error_message)}</p>`
+        : '';
+    return `
+    <div class="audit-finding">
+        <div class="audit-finding-top">
+            ${renderAuditBadge(`${title}: ${detail.model || '-'}`, 'risk-unknown')}
+            ${detail.decision ? renderReviewDecisionBadge(detail.decision) : ''}
+            ${detail.confidence ? renderAuditBadge(detail.confidence, `risk-${normalizeAuditToken(detail.confidence)}`) : ''}
+            ${detail.action && detail.action !== 'none' ? renderRecommendedActionBadge(detail.action) : ''}
+        </div>
+        <p>${escapeHtml(detail.reason || detail.pending_reason || '未提供说明')}</p>
+        <div class="full-check-issue-compare">
+            ${renderFullCheckCompareBox('结论', detail.final_label, detail.final_command_id, detail.final_slots, detail.final_bucket)}
+        </div>
+        ${demotion}
+        ${error}
+        ${notes}
+    </div>`;
+}
+
+function renderFullCheckCompareBox(title, label, commandId, slots, bucket = null) {
+    const bucketHtml = bucket
+        ? `<div class="mono">${escapeHtml(`bucket: ${bucket}`)}</div>`
+        : '';
     return `
     <div class="full-check-issue-box">
         <div class="full-check-issue-box-label">${escapeHtml(title)}</div>
         <div class="full-check-issue-box-value">
             ${renderLabelBadge(label || '-')}
             <div class="mono">${escapeHtml(commandId || '-')}</div>
+            ${bucketHtml}
             <div class="slots-display">${formatSlotsHtml(slots)}</div>
         </div>
     </div>`;
 }
 
-function getSuggestedFullCheckAction(issue) {
-    const action = issue?.recommended_action || 'keep';
-    if (action === 'keep') {
-        return '';
+function buildSuggestedFullCheckActionPayload(issue) {
+    const hasReviewAutoAction = issue?.review_decision === 'auto_process'
+        && issue?.review_action
+        && issue.review_action !== 'none';
+    const action = hasReviewAutoAction
+        ? issue.review_action
+        : (issue?.recommended_action || 'keep');
+
+    if (!action || action === 'keep') {
+        return null;
     }
-    if (action === 'apply_expected' && issue?.source_type === 'global_negative') {
-        return '';
+    if (action === 'apply_expected' && !hasReviewAutoAction && issue?.source_type === 'global_negative') {
+        return null;
     }
-    if (action === 'apply_expected' && !issue?.can_apply_expected) {
-        return '';
+    if (action === 'apply_expected' && !hasReviewAutoAction && !issue?.can_apply_expected) {
+        return null;
     }
-    return action;
+
+    const payload = {
+        sample_id: issue.sample_id,
+        action,
+    };
+
+    if (hasReviewAutoAction) {
+        if (issue.review_reason) {
+            payload.resolution_message = issue.review_reason;
+        }
+        if (action === 'apply_expected') {
+            if (!issue.review_final_label) {
+                return null;
+            }
+            payload.expected_label = issue.review_final_label || null;
+            payload.expected_command_id = issue.review_final_command_id || null;
+            payload.expected_slots = issue.review_final_slots || {};
+            payload.expected_bucket = issue.review_final_bucket || null;
+            if (issue.source_type === 'global_negative' && issue.review_final_label === 'quick_command') {
+                return null;
+            }
+            if (issue.source_type === 'global_negative' && !issue.review_final_bucket) {
+                return null;
+            }
+            if (
+                issue.source_type !== 'global_negative'
+                && issue.review_final_label === 'quick_command'
+                && (!issue.review_final_command_id || Object.keys(issue.review_final_slots || {}).length === 0)
+            ) {
+                return null;
+            }
+        }
+    }
+
+    return payload;
 }
 
 function getSuggestedActionLabel(issue) {
-    const action = issue?.recommended_action || 'keep';
+    const payload = buildSuggestedFullCheckActionPayload(issue);
+    const action = payload?.action || issue?.recommended_action || 'keep';
     if (action === 'delete_sample') {
-        return '按建议删除';
+        return issue?.review_decision === 'auto_process' ? '按复核删除' : '按建议删除';
     }
-    if (action === 'apply_expected' && issue?.source_type === 'global_negative') {
+    if (action === 'apply_expected' && !payload) {
         return '请删除或忽略';
     }
-    if (action === 'apply_expected' && !issue?.can_apply_expected) {
+    if (action === 'apply_expected' && issue?.review_decision !== 'auto_process' && !issue?.can_apply_expected) {
         return '无法应用建议';
     }
     if (action === 'apply_expected') {
-        return '应用建议';
+        return issue?.review_decision === 'auto_process' ? '应用复核结果' : '应用建议';
+    }
+    if (issue?.review_decision === 'pending_confirmation') {
+        return '待人工确认';
     }
     return '建议保留';
 }

@@ -170,6 +170,17 @@ output/
     ├── quality_audit/                   # 末尾质量抽查结果
     │   ├── audit_round_01.json          # 单轮抽查明细
     │   └── summary.json                 # 抽查汇总
+    ├── full_data_check/                 # 全部数据检查结果
+    │   ├── manifest.json                # 检查任务信息
+    │   ├── summary.json                 # 问题汇总与统计
+    │   ├── dataset_snapshot.jsonl       # 检查时使用的数据快照
+    │   ├── batch_0001.json              # 单批检查结果
+    │   ├── resolution_state.json        # issue 处理状态
+    │   ├── actions.jsonl                # 自动/手动处理记录
+    │   └── issue_review/                # 问题样本逐条复核结果
+    │       ├── manifest.json            # 复核任务信息
+    │       ├── reviews.jsonl            # 逐条复核日志
+    │       └── summary.json             # 复核汇总
     └── {COMMAND_ID}/                    # 如 CAST_ON_TARGET/
         ├── vocab.json                   # 该指令特定的填槽词库
         ├── aliases.json                 # 扩写后的别名模板
@@ -220,6 +231,12 @@ python scripts/generate_adversarial_samples.py mmorpg CAST_ON_TARGET
 
 # 仅生成 paraphrase
 python scripts/generate_paraphrase_samples.py mmorpg CAST_ON_TARGET
+
+# 全部数据检查
+python scripts/full_data_check.py --game mmorpg
+
+# 逐条复核问题样本，并自动处理可安全落地的问题
+python scripts/review_full_check_issues.py --game mmorpg
 ```
 
 ### LLM 配置
@@ -243,6 +260,16 @@ mods:glm-5,kimi-k2.5,mimo-v2-pro,deepseek-v3.2
 | `adversarial_prompt.txt` | 最小编辑对抗样本 |
 | `paraphrase_prompt.txt` | 自由改写 |
 | `quality_audit_prompt.txt` | 末尾质量抽查 |
+| `full_check_issue_review_prompt.txt` | 全部数据检查问题样本逐条复核 |
+
+### 全部数据检查与问题样本复核
+
+- `scripts/full_data_check.py` 会对 `output/{game}/merged_all.jsonl` 与源样本做全量检查，输出 `verdict`、`recommended_action` 以及可落地的 `expected_*` 修正建议。
+- 全部数据检查支持断点续跑；勾选或传入 `--restart` 时会清空 `output/{game}/full_data_check/` 后重新生成检查工件。
+- `scripts/review_full_check_issues.py` 会逐条读取 full-check issue，再次调用 LLM，将结果固定收敛为 `auto_process` 或 `pending_confirmation` 两类。
+- `auto_process` 仅允许三种动作：`apply_expected`、`delete_sample`、`ignore`；其中“应保留且无需改动”的 issue 会自动按 `ignore` 关闭。
+- 只有高置信且通过本地安全校验的 issue 才会自动执行 `apply_expected`、`delete_sample` 或 `ignore`；不能安全落地的结果会保留为 `pending_confirmation`。
+- `issue_review/` 只记录第二阶段复核结论，不覆盖原始 `batch_*.json`；页面展示时会合并两阶段结果。
 
 ## 3. Commands 压缩器
 
@@ -412,7 +439,7 @@ python scripts/embedding_client.py
 
 ### 功能说明
 
-基于 FastAPI + 原生 HTML/CSS/JS 的 Web 可视化面板，用于**配置生成参数、触发生成任务、实时查看进度日志、展示数据统计和浏览生成样本**。
+基于 FastAPI + 原生 HTML/CSS/JS 的 Web 可视化面板，用于**配置生成参数、触发生成任务、实时查看进度日志、展示数据统计、浏览生成样本，以及查看全部数据检查/问题样本复核结果**。
 
 ### 启动方式
 
@@ -431,6 +458,7 @@ python tools/dashboard/server.py
 #### 1）控制台页面
 
 - **配置面板（左侧）**：游戏类型、LLM 模型、指定 Command、各类样本数量、跳过选项等
+- **任务卡片**：支持“主流程”“质量抽查”“全局负样本”“全部数据检查”“问题样本复核”五类任务入口；后两者支持继续执行或重新开始
 - **Pipeline 进度条**：7 步骤可视化（词库→扩写→模板→对抗→Paraphrase→全局负样本→合并），实时切换 ⏳/🔄/✅/⏭️ 状态
 - **实时日志**：SSE 推送的 Python 脚本输出，自动滚动
 - **统计卡片 + 图表**：总样本数、label 分布（环形图）、source_type 分布（条形图）
@@ -439,6 +467,7 @@ python tools/dashboard/server.py
 
 - **Command 卡片列表**：每个 command 的 template/adversarial/paraphrase 样本统计
 - **全局负样本卡片**：按 bucket 分组浏览
+- **全部数据检查面板**：查看检查摘要、issue 列表、推荐动作、复核结论与处理状态
 - **点击展开样本表格**：带 label 标签色彩编码和 slots 展示
 - **按类型筛选**：All / Template / Adversarial / Paraphrase / Global Neg
 
@@ -455,9 +484,18 @@ python tools/dashboard/server.py
 | GET | `/api/commands/{game}` | 获取 commands 列表 |
 | GET | `/api/commands/{game}/validate` | 运行校验并返回结果 |
 | POST | `/api/generate` | 触发数据生成任务 |
+| POST | `/api/global-negatives` | 独立触发全局负样本任务 |
+| POST | `/api/audit/run` | 触发质量抽查任务 |
+| POST | `/api/full-check/run` | 触发全部数据检查任务 |
+| POST | `/api/full-check/review/run` | 触发问题样本逐条复核任务 |
 | GET | `/api/generate/status` | 获取当前任务状态 |
 | POST | `/api/generate/stop` | 停止当前任务 |
 | GET | `/api/output/{game}` | 获取输出统计概览 |
+| GET | `/api/audit/{game}` | 获取质量抽查汇总 |
+| GET | `/api/audit/{game}/rounds/{round_index}` | 获取单轮质量抽查明细 |
+| GET | `/api/full-check/{game}` | 获取全部数据检查汇总（含 review_summary） |
+| GET | `/api/full-check/{game}/issues` | 获取全部数据检查 issue 列表（含复核状态） |
+| POST | `/api/full-check/{game}/actions/apply` | 批量执行 issue 处理动作 |
 | GET | `/api/output/{game}/{command_id}/{file_type}` | 获取样本数据 |
 | GET | `/api/output/{game}/global_negatives` | 获取全局负样本 |
 | GET | `/api/stream` | SSE 实时推送日志 |
@@ -473,3 +511,13 @@ tools/dashboard/
     ├── style.css      # 深色主题样式
     └── app.js         # 前端逻辑
 ```
+
+### 问题样本复核双模型一致机制
+
+- `scripts/review_full_check_issues.py` 新增参数：`--secondary_model`，用于指定问题样本复核的副模型。
+- 问题样本复核现在要求主模型和副模型都独立完成同一条 issue 的复核，且结构化自动动作完全一致，才允许自动落地。
+- 双模型一致性只比较结构化动作：`action`、`expected_label`、`expected_command_id`、`expected_slots`、`expected_bucket`；不要求自然语言 `reason` 完全一致。
+- `issue_review/manifest.json` 会额外记录 `primary_model`、`secondary_model` 和 `consensus_mode`；旧版单模型工件不能直接续跑，需重新开始。
+- `issue_review/reviews.jsonl` 会同时保存最终共识结果以及 `primary_review`、`secondary_review` 两份模型明细。
+- `GET /api/full-check/{game}` 的 `review_summary` 现在会补充 `dual_model_agree_auto`、`dual_model_agree_pending`、`dual_model_disagree`、`dual_model_errors` 四类统计。
+- `GET /api/full-check/{game}/issues` 现在会返回 `review_agreement_status`、`review_disagreement_fields`、`review_primary_result`、`review_secondary_result` 等字段，供 Dashboard 详情页展示双模型结论。

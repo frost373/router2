@@ -72,6 +72,11 @@ FULL_DATA_CHECK_STEPS = [
     {"key": "Step 2", "name": "全量检查"},
     {"key": "Step 3", "name": "汇总结果"},
 ]
+FULL_CHECK_REVIEW_STEPS = [
+    {"key": "Step 1", "name": "准备复核"},
+    {"key": "Step 2", "name": "逐条复核"},
+    {"key": "Step 3", "name": "汇总结果"},
+]
 
 
 def normalize_steps(steps: list[dict]) -> list[dict]:
@@ -169,6 +174,10 @@ class TaskState:
         event.setdefault("steps", self.get_steps_payload())
         event.setdefault("current_step", self.current_step)
         event.setdefault("statuses", list(self.step_statuses))
+        event.setdefault("running", self.running)
+        event.setdefault("finished", self.finished)
+        event.setdefault("error", self.error)
+        event.setdefault("stopped", self.stopped)
         event.setdefault("llm_log_offset", self.llm_log_offset)
         return event
 
@@ -474,9 +483,23 @@ class FullDataCheckRequest(BaseModel):
     restart: bool = False
 
 
+class FullCheckIssueReviewRequest(BaseModel):
+    game: str = "mmorpg"
+    model: Optional[str] = None
+    secondary_model: Optional[str] = None
+    think_mode: bool = False
+    think_level: str = "high"
+    restart: bool = False
+
+
 class FullCheckActionItem(BaseModel):
     sample_id: str
     action: str
+    expected_label: Optional[str] = None
+    expected_command_id: Optional[str] = None
+    expected_slots: Optional[dict[str, str]] = None
+    expected_bucket: Optional[str] = None
+    resolution_message: Optional[str] = None
 
 
 class FullCheckActionRequest(BaseModel):
@@ -580,6 +603,25 @@ def build_full_data_check_command(args: FullDataCheckRequest) -> list[str]:
     return cmd
 
 
+def build_full_check_issue_review_command(args: FullCheckIssueReviewRequest) -> list[str]:
+    cmd = [
+        sys.executable,
+        "-u",
+        str(SCRIPTS_DIR / "review_full_check_issues.py"),
+        "--game", args.game,
+    ]
+    if args.model:
+        cmd.extend(["--model", args.model])
+    if args.secondary_model:
+        cmd.extend(["--secondary_model", args.secondary_model])
+    if args.restart:
+        cmd.append("--restart")
+    if args.think_mode:
+        cmd.append("--think_mode")
+        cmd.extend(["--think_level", args.think_level])
+    return cmd
+
+
 def run_task(
     cmd: list[str],
     *,
@@ -658,6 +700,7 @@ def run_task(
                 "type": "done",
             }))
         else:
+            task_state.replace_running_steps("skipped")
             task_state.error = True
             task_state.broadcast(task_state.make_event({
                 "type": "error",
@@ -671,6 +714,7 @@ def run_task(
         if task_state.stopped:
             task_state.error = False
         else:
+            task_state.replace_running_steps("skipped")
             task_state.error = True
             task_state.broadcast(task_state.make_event({"type": "error", "message": str(e)}))
     finally:
@@ -684,12 +728,15 @@ def run_task(
 def api_config():
     """获取可用配置（game 列表、模型列表、默认参数）"""
     llm = read_llm_config()
+    default_model = llm["models"][-1] if llm["models"] else "deepseek-v3.2"
+    default_secondary_model = next((m for m in llm["models"] if m != default_model), None)
     return {
         "games": list_games(),
         "models": llm["models"],
         "defaults": {
             "game": "mmorpg",
-            "model": llm["models"][-1] if llm["models"] else "deepseek-v3.2",
+            "model": default_model,
+            "secondary_model": default_secondary_model,
             "template_count": 40,
             "adversarial_source": 10,
             "paraphrase_source": 5,
@@ -831,6 +878,44 @@ def api_full_data_check_run(req: FullDataCheckRequest):
     return {"status": "started", "message": "全部数据检查任务已启动"}
 
 
+@app.post("/api/full-check/review/run")
+def api_full_check_issue_review_run(req: FullCheckIssueReviewRequest):
+    """触发全部数据检查问题样本复核任务"""
+    if task_state.running:
+        raise HTTPException(409, "已有任务在运行中")
+    llm = read_llm_config()
+    available_models = llm["models"]
+    primary_model = (req.model or "").strip()
+    secondary_model = (req.secondary_model or "").strip()
+    if not primary_model:
+        raise HTTPException(400, "问题样本复核必须指定主模型")
+    if not secondary_model:
+        raise HTTPException(400, "问题样本复核必须指定副模型")
+    if primary_model == secondary_model:
+        raise HTTPException(400, "问题样本复核要求主模型和副模型不同")
+    if available_models:
+        if primary_model not in available_models:
+            raise HTTPException(400, f"主模型不在可用列表中: {primary_model}")
+        if secondary_model not in available_models:
+            raise HTTPException(400, f"副模型不在可用列表中: {secondary_model}")
+
+    task_state.running = True
+
+    thread = threading.Thread(
+        target=run_task,
+        kwargs={
+            "cmd": build_full_check_issue_review_command(req),
+            "task_type": "full_check_issue_review",
+            "task_name": "问题样本复核",
+            "steps": FULL_CHECK_REVIEW_STEPS,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    return {"status": "started", "message": "问题样本复核任务已启动"}
+
+
 @app.get("/api/generate/status")
 def api_generate_status():
     """获取当前任务状态"""
@@ -925,9 +1010,26 @@ def api_full_check_apply_actions(game: str, req: FullCheckActionRequest):
         raise HTTPException(409, "任务运行中，暂不能处理检查结果")
 
     try:
+        payloads = []
+        for item in req.actions:
+            payload = {
+                "sample_id": item.sample_id,
+                "action": item.action,
+            }
+            if item.expected_label is not None:
+                payload["expected_label"] = item.expected_label
+            if item.expected_command_id is not None:
+                payload["expected_command_id"] = item.expected_command_id
+            if item.expected_slots is not None:
+                payload["expected_slots"] = item.expected_slots
+            if item.expected_bucket is not None:
+                payload["expected_bucket"] = item.expected_bucket
+            if item.resolution_message is not None:
+                payload["resolution_message"] = item.resolution_message
+            payloads.append(payload)
         return apply_full_check_actions(
             game,
-            [{"sample_id": item.sample_id, "action": item.action} for item in req.actions],
+            payloads,
         )
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))

@@ -24,7 +24,7 @@ from audit_training_data import (
     normalize_label,
 )
 from command_registry_compact import compact_file, load_commands
-from llm_client import call_llm_json
+from llm_client import call_llm_json, get_available_models
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent
@@ -33,6 +33,8 @@ OUTPUT_DIR = PROJECT_DIR / "output"
 DEFAULT_BATCH_SIZE = 20
 CHECK_DIR_NAME = "full_data_check"
 CHECK_VERSION = 1
+ISSUE_REVIEW_DIR_NAME = "issue_review"
+ISSUE_REVIEW_VERSION = 2
 
 MANIFEST_FILE = "manifest.json"
 SUMMARY_FILE = "summary.json"
@@ -40,6 +42,9 @@ SNAPSHOT_FILE = "dataset_snapshot.jsonl"
 RESOLUTION_STATE_FILE = "resolution_state.json"
 ACTION_LOG_FILE = "actions.jsonl"
 BATCH_FILE_PATTERN = "batch_{batch_index:04d}.json"
+ISSUE_REVIEW_MANIFEST_FILE = "manifest.json"
+ISSUE_REVIEW_SUMMARY_FILE = "summary.json"
+ISSUE_REVIEW_LOG_FILE = "reviews.jsonl"
 
 SOURCE_FILE_TYPES: list[tuple[str, str]] = [
     ("template.jsonl", "template"),
@@ -49,6 +54,7 @@ SOURCE_FILE_TYPES: list[tuple[str, str]] = [
 SOURCE_TYPE_TO_FILENAME = {source_type: filename for filename, source_type in SOURCE_FILE_TYPES}
 
 ISSUE_FILTERABLE_VERDICTS = {"pass", "borderline", "fail", "fatal"}
+VALID_SAMPLE_LABELS = {"quick_command", "tactical", "chat"}
 RESOLUTION_PENDING = "pending"
 RESOLUTION_APPLIED = "applied"
 RESOLUTION_IGNORED = "ignored"
@@ -69,6 +75,58 @@ RECOMMENDED_ACTIONS = {
     ACTION_APPLY_EXPECTED,
     ACTION_DELETE_SAMPLE,
 }
+REVIEW_DECISION_AUTO_PROCESS = "auto_process"
+REVIEW_DECISION_PENDING_CONFIRMATION = "pending_confirmation"
+REVIEW_DECISIONS = {
+    REVIEW_DECISION_AUTO_PROCESS,
+    REVIEW_DECISION_PENDING_CONFIRMATION,
+}
+REVIEW_ACTION_NONE = "none"
+REVIEW_ACTIONS = {
+    ACTION_APPLY_EXPECTED,
+    ACTION_DELETE_SAMPLE,
+    ACTION_IGNORE,
+    REVIEW_ACTION_NONE,
+}
+REVIEW_CONFIDENCE_LEVELS = {"low", "medium", "high"}
+REVIEW_CONSENSUS_MODE_STRICT_STRUCTURED_ACTION = "strict_structured_action"
+REVIEW_AGREEMENT_AGREED_AUTO_PROCESS = "agreed_auto_process"
+REVIEW_AGREEMENT_AGREED_PENDING_CONFIRMATION = "agreed_pending_confirmation"
+REVIEW_AGREEMENT_MISMATCH = "mismatch"
+REVIEW_AGREEMENT_PRIMARY_ERROR = "primary_error"
+REVIEW_AGREEMENT_SECONDARY_ERROR = "secondary_error"
+REVIEW_AGREEMENT_BOTH_ERROR = "both_error"
+REVIEW_AGREEMENT_STATUSES = {
+    REVIEW_AGREEMENT_AGREED_AUTO_PROCESS,
+    REVIEW_AGREEMENT_AGREED_PENDING_CONFIRMATION,
+    REVIEW_AGREEMENT_MISMATCH,
+    REVIEW_AGREEMENT_PRIMARY_ERROR,
+    REVIEW_AGREEMENT_SECONDARY_ERROR,
+    REVIEW_AGREEMENT_BOTH_ERROR,
+}
+REVIEW_CONFIDENCE_RANKS = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+}
+TACTICAL_GLOBAL_NEGATIVE_BUCKETS = {
+    "tactical_self_action",
+    "tactical_team_plan",
+    "tactical_conditional",
+    "tactical_multi_step",
+    "tactical_missing_slot",
+    "tactical_out_of_registry_teammate_action",
+    "tactical_ambiguous",
+}
+CHAT_GLOBAL_NEGATIVE_BUCKETS = {
+    "chat_emotion",
+    "chat_noise",
+    "chat_out_of_game",
+}
+GLOBAL_NEGATIVE_BUCKETS = (
+    TACTICAL_GLOBAL_NEGATIVE_BUCKETS
+    | CHAT_GLOBAL_NEGATIVE_BUCKETS
+)
 
 PROMPT_EXTENSION = """
 
@@ -187,6 +245,22 @@ def get_action_log_path(game: str) -> Path:
     return get_full_check_dir(game) / ACTION_LOG_FILE
 
 
+def get_issue_review_dir(game: str) -> Path:
+    return get_full_check_dir(game) / ISSUE_REVIEW_DIR_NAME
+
+
+def get_issue_review_manifest_path(game: str) -> Path:
+    return get_issue_review_dir(game) / ISSUE_REVIEW_MANIFEST_FILE
+
+
+def get_issue_review_summary_path(game: str) -> Path:
+    return get_issue_review_dir(game) / ISSUE_REVIEW_SUMMARY_FILE
+
+
+def get_issue_review_log_path(game: str) -> Path:
+    return get_issue_review_dir(game) / ISSUE_REVIEW_LOG_FILE
+
+
 def get_batch_path(game: str, batch_index: int) -> Path:
     return get_full_check_dir(game) / BATCH_FILE_PATTERN.format(batch_index=batch_index)
 
@@ -212,6 +286,56 @@ def normalize_slots(value: Any) -> dict[str, str]:
         if isinstance(slot_value, str) and slot_value:
             normalized[key] = slot_value
     return normalized
+
+
+def normalize_bucket(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def get_sample_bucket(sample: dict) -> str:
+    meta = sample.get("meta")
+    if not isinstance(meta, dict):
+        return ""
+    return normalize_bucket(meta.get("bucket"))
+
+
+def set_sample_label(sample: dict, label: str) -> None:
+    current = sample.get("label")
+    if isinstance(current, dict):
+        updated_label = dict(current)
+        updated_label["type"] = label
+        sample["label"] = updated_label
+        return
+    sample["label"] = label
+
+
+def set_sample_bucket(sample: dict, bucket: str) -> None:
+    meta = sample.get("meta")
+    updated_meta = dict(meta) if isinstance(meta, dict) else {}
+    updated_meta["bucket"] = bucket
+    sample["meta"] = updated_meta
+
+
+def validate_global_negative_bucket(label: str, bucket: str) -> None:
+    if label == "tactical":
+        if bucket not in TACTICAL_GLOBAL_NEGATIVE_BUCKETS:
+            raise ValueError(f"无效的 tactical bucket: {bucket or '<empty>'}")
+        return
+    if label == "chat":
+        if bucket not in CHAT_GLOBAL_NEGATIVE_BUCKETS:
+            raise ValueError(f"无效的 chat bucket: {bucket or '<empty>'}")
+        return
+    raise ValueError(f"global_negative 只允许 tactical/chat，不能应用为: {label}")
+
+
+def load_issue_review_prompt_template() -> str:
+    path = SCRIPT_DIR / "prompts" / "full_check_issue_review_prompt.txt"
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 def command_slot_map(game: str) -> dict[str, list[str]]:
@@ -529,12 +653,14 @@ def enrich_sample_result(
         "source_line_number": batch_row["source_line_number"],
         "sample_hash": batch_row["sample_hash"],
         "source_type": current_sample.get("source_type", batch_row["source_type"]),
+        "source_command_id": batch_row["source_command_id"],
         "utterance": sample_result.get("utterance") or get_utterance(current_sample),
         "current_label": sample_result.get("current_label") or normalize_label(current_sample),
         "current_command_id": normalize_command_id(
             sample_result.get("current_command_id") or current_sample.get("command_id")
         ),
         "current_slots": normalize_slots(current_sample.get("slots")),
+        "current_bucket": get_sample_bucket(current_sample) or None,
         "expected_command_id": expected_command_id or None,
         "expected_slots": expected_slots,
         "recommended_action": recommended_action,
@@ -739,6 +865,146 @@ def merge_issue_resolution_state(issue: dict, resolution_state: dict[str, dict])
     return merged
 
 
+def load_issue_review_manifest(game: str) -> dict | None:
+    payload = read_json_file(get_issue_review_manifest_path(game), default=None)
+    return payload if isinstance(payload, dict) else None
+
+
+def write_issue_review_manifest(game: str, manifest: dict) -> None:
+    manifest["updated_at"] = utc_now_iso()
+    write_json_file(get_issue_review_manifest_path(game), manifest)
+
+
+def load_issue_review_entries(game: str) -> list[dict]:
+    return [
+        item for item in load_jsonl(get_issue_review_log_path(game))
+        if isinstance(item, dict)
+    ]
+
+
+def load_issue_review_map(game: str) -> dict[str, dict]:
+    result: dict[str, dict] = {}
+    for entry in load_issue_review_entries(game):
+        sample_id = str(entry.get("sample_id") or "").strip()
+        if sample_id:
+            result[sample_id] = entry
+    return result
+
+
+def build_issue_review_summary_payload(game: str) -> dict | None:
+    review_dir = get_issue_review_dir(game)
+    review_manifest = load_issue_review_manifest(game)
+    review_map = load_issue_review_map(game)
+
+    if not review_dir.exists() and not review_map and not review_manifest:
+        return None
+
+    summary = {
+        "game": game,
+        "reviewed_total": len(review_map),
+        "auto_processed": 0,
+        "pending_confirmation": 0,
+        "auto_ignored": 0,
+        "auto_applied": 0,
+        "apply_conflicts": 0,
+        "dual_model_agree_auto": 0,
+        "dual_model_agree_pending": 0,
+        "dual_model_disagree": 0,
+        "dual_model_errors": 0,
+        "created_at": review_manifest.get("created_at") if isinstance(review_manifest, dict) else None,
+        "updated_at": utc_now_iso(),
+    }
+
+    for entry in review_map.values():
+        decision = str(entry.get("decision") or "").strip()
+        action = str(entry.get("action") or "").strip()
+        execution_status = str(entry.get("execution_status") or "").strip()
+        agreement_status = str(entry.get("agreement_status") or "").strip()
+        if decision == REVIEW_DECISION_PENDING_CONFIRMATION:
+            summary["pending_confirmation"] += 1
+        if execution_status in {RESOLUTION_APPLIED, RESOLUTION_IGNORED}:
+            summary["auto_processed"] += 1
+        if execution_status == RESOLUTION_IGNORED and action == ACTION_IGNORE:
+            summary["auto_ignored"] += 1
+        if execution_status == RESOLUTION_APPLIED and action in {ACTION_APPLY_EXPECTED, ACTION_DELETE_SAMPLE}:
+            summary["auto_applied"] += 1
+        if execution_status == RESOLUTION_CONFLICT:
+            summary["apply_conflicts"] += 1
+        if agreement_status == REVIEW_AGREEMENT_AGREED_AUTO_PROCESS:
+            summary["dual_model_agree_auto"] += 1
+        elif agreement_status == REVIEW_AGREEMENT_AGREED_PENDING_CONFIRMATION:
+            summary["dual_model_agree_pending"] += 1
+        elif agreement_status == REVIEW_AGREEMENT_MISMATCH:
+            summary["dual_model_disagree"] += 1
+        elif agreement_status in {
+            REVIEW_AGREEMENT_PRIMARY_ERROR,
+            REVIEW_AGREEMENT_SECONDARY_ERROR,
+            REVIEW_AGREEMENT_BOTH_ERROR,
+        }:
+            summary["dual_model_errors"] += 1
+
+    write_json_file(get_issue_review_summary_path(game), summary)
+    return summary
+
+
+def normalize_review_detail_payload(detail: Any) -> dict | None:
+    if not isinstance(detail, dict):
+        return None
+    raw_notes = detail.get("safety_notes")
+    return {
+        "model": str(detail.get("model") or "").strip() or None,
+        "decision": str(detail.get("decision") or "").strip() or None,
+        "action": str(detail.get("action") or "").strip() or None,
+        "confidence": str(detail.get("confidence") or "").strip().lower() or None,
+        "final_label": str(detail.get("final_label") or "").strip() or None,
+        "final_command_id": normalize_command_id(detail.get("final_command_id")) or None,
+        "final_slots": normalize_slots(detail.get("final_slots")),
+        "final_bucket": normalize_bucket(detail.get("final_bucket")) or None,
+        "reason": str(detail.get("reason") or "").strip(),
+        "pending_reason": str(detail.get("pending_reason") or "").strip(),
+        "demotion_reason": str(detail.get("demotion_reason") or "").strip(),
+        "error_message": str(detail.get("error_message") or "").strip(),
+        "safety_notes": [
+            str(item).strip()
+            for item in (raw_notes if isinstance(raw_notes, list) else [])
+            if str(item).strip()
+        ],
+    }
+
+
+def merge_issue_review_state(issue: dict, review_state: dict[str, dict]) -> dict:
+    review = review_state.get(issue["sample_id"], {})
+    merged = dict(issue)
+    merged["review_decision"] = review.get("decision")
+    merged["review_action"] = review.get("action")
+    merged["review_confidence"] = review.get("confidence")
+    merged["review_reason"] = review.get("reason", "")
+    merged["review_pending_reason"] = review.get("pending_reason", "")
+    merged["review_final_label"] = review.get("final_label")
+    merged["review_final_command_id"] = review.get("final_command_id")
+    merged["review_final_slots"] = normalize_slots(review.get("final_slots"))
+    merged["review_final_bucket"] = review.get("final_bucket")
+    merged["review_safety_notes"] = (
+        review.get("safety_notes")
+        if isinstance(review.get("safety_notes"), list)
+        else []
+    )
+    merged["review_execution_status"] = review.get("execution_status")
+    merged["review_execution_message"] = review.get("execution_message", "")
+    merged["review_updated_at"] = review.get("updated_at")
+    merged["review_primary_model"] = review.get("primary_model")
+    merged["review_secondary_model"] = review.get("secondary_model")
+    merged["review_agreement_status"] = review.get("agreement_status")
+    merged["review_disagreement_fields"] = (
+        review.get("disagreement_fields")
+        if isinstance(review.get("disagreement_fields"), list)
+        else []
+    )
+    merged["review_primary_result"] = normalize_review_detail_payload(review.get("primary_review"))
+    merged["review_secondary_result"] = normalize_review_detail_payload(review.get("secondary_review"))
+    return merged
+
+
 def get_full_check_overview(game: str) -> dict:
     check_dir = get_full_check_dir(game)
     if not check_dir.exists():
@@ -748,12 +1014,13 @@ def get_full_check_overview(game: str) -> dict:
             "output_dir": str(check_dir),
             "manifest": None,
             "summary": None,
+            "review_summary": None,
             "can_resume": False,
         }
 
     manifest = load_manifest(game)
-    summary = read_json_file(get_summary_path(game), default=None)
-    if not summary and manifest:
+    summary = None
+    if manifest:
         summary = build_summary_payload(game)
 
     can_resume = False
@@ -765,6 +1032,7 @@ def get_full_check_overview(game: str) -> dict:
         )
 
     resolution_state = load_resolution_state(game)
+    review_summary = build_issue_review_summary_payload(game)
     issue_index = build_issue_index(game)
     unresolved_count = sum(
         1 for sample_id in issue_index
@@ -777,6 +1045,7 @@ def get_full_check_overview(game: str) -> dict:
         "output_dir": str(check_dir),
         "manifest": manifest,
         "summary": summary,
+        "review_summary": review_summary,
         "can_resume": can_resume,
         "unresolved_count": unresolved_count,
     }
@@ -814,8 +1083,12 @@ def get_full_check_issues(
     keyword = q.strip().lower()
 
     resolution_state = load_resolution_state(game)
+    review_state = load_issue_review_map(game)
     issues = [
-        merge_issue_resolution_state(issue, resolution_state)
+        merge_issue_review_state(
+            merge_issue_resolution_state(issue, resolution_state),
+            review_state,
+        )
         for issue in build_issue_index(game).values()
     ]
     issues.sort(key=lambda item: (item.get("dataset_index", 0), item.get("batch_index", 0)))
@@ -835,6 +1108,9 @@ def get_full_check_issues(
                     str(issue.get("issue_summary") or ""),
                     str(issue.get("reason") or ""),
                     str(issue.get("fix_suggestion") or ""),
+                    str(issue.get("review_reason") or ""),
+                    str(issue.get("review_pending_reason") or ""),
+                    str(issue.get("review_execution_message") or ""),
                     str(issue.get("source_file") or ""),
                 ]
             ).lower()
@@ -1015,20 +1291,80 @@ def find_current_source_row(
     raise ValueError(f"样本存在多处重复，无法安全定位: {issue['sample_id']}")
 
 
-def apply_expected_to_sample(sample: dict, issue: dict) -> dict:
+def build_effective_issue_for_action(issue: dict, action: dict) -> dict:
+    effective = dict(issue)
+
+    if "expected_label" in action:
+        value = str(action.get("expected_label") or "").strip()
+        effective["expected_label"] = value
+    if "expected_command_id" in action:
+        effective["expected_command_id"] = normalize_command_id(action.get("expected_command_id")) or None
+    if "expected_slots" in action:
+        effective["expected_slots"] = normalize_slots(action.get("expected_slots"))
+    if "expected_bucket" in action:
+        effective["expected_bucket"] = normalize_bucket(action.get("expected_bucket")) or None
+    return effective
+
+
+def describe_expected_state(issue: dict) -> str:
+    expected_label = str(issue.get("expected_label") or "").strip() or "unknown"
+    if expected_label == "quick_command":
+        return (
+            f"label={expected_label}, "
+            f"command_id={normalize_command_id(issue.get('expected_command_id')) or '<empty>'}, "
+            f"slots={stable_json_dumps(normalize_slots(issue.get('expected_slots')))}"
+        )
+    if str(issue.get("source_type") or "") == "global_negative":
+        return (
+            f"label={expected_label}, "
+            f"bucket={normalize_bucket(issue.get('expected_bucket')) or '<empty>'}"
+        )
+    return f"label={expected_label}"
+
+
+def apply_expected_to_sample(sample: dict, issue: dict, slot_map: dict[str, list[str]]) -> dict:
     expected_label = issue.get("expected_label")
-    if expected_label not in {"quick_command", "tactical", "chat"}:
+    if expected_label not in VALID_SAMPLE_LABELS:
         raise ValueError(f"无效的 expected_label: {expected_label}")
 
     updated = dict(sample)
-    updated["label"] = expected_label
+    source_type = str(issue.get("source_type") or "")
+    utterance = get_utterance(updated)
+
+    if source_type == "global_negative":
+        if expected_label == "quick_command":
+            raise ValueError("global_negative 样本不能直接应用为 quick_command，请人工确认")
+        expected_bucket = normalize_bucket(issue.get("expected_bucket"))
+        validate_global_negative_bucket(expected_label, expected_bucket)
+        set_sample_label(updated, expected_label)
+        set_sample_bucket(updated, expected_bucket)
+        updated.pop("command_id", None)
+        updated.pop("slots", None)
+        return updated
+
+    set_sample_label(updated, expected_label)
 
     if expected_label == "quick_command":
         expected_command_id = normalize_command_id(issue.get("expected_command_id"))
         if not expected_command_id:
             raise ValueError("缺少 expected_command_id，无法应用建议")
+        required_slots = slot_map.get(expected_command_id)
+        if required_slots is None:
+            raise ValueError(f"未知的 expected_command_id: {expected_command_id}")
+
+        expected_slots = normalize_slots(issue.get("expected_slots"))
+        missing_required_slots = [
+            slot_name for slot_name in required_slots
+            if slot_name not in expected_slots
+        ]
+        if missing_required_slots:
+            raise ValueError(f"缺少 required slots: {', '.join(missing_required_slots)}")
+        for slot_name, slot_value in expected_slots.items():
+            if slot_value not in utterance:
+                raise ValueError(f"slot `{slot_name}` 不是原句可抽取子串: {slot_value}")
+
         updated["command_id"] = expected_command_id
-        updated["slots"] = normalize_slots(issue.get("expected_slots"))
+        updated["slots"] = {slot_name: expected_slots[slot_name] for slot_name in required_slots}
     else:
         updated["command_id"] = ""
         updated["slots"] = {}
@@ -1041,7 +1377,9 @@ def resolve_apply_target_file(game: str, issue: dict, updated_sample: dict) -> s
     expected_label = normalize_label(updated_sample)
 
     if source_type == "global_negative":
-        raise ValueError("global_negative 样本不支持直接应用建议，请删除或忽略")
+        if expected_label == "quick_command":
+            raise ValueError("global_negative 样本不能直接应用为 quick_command，请人工确认")
+        return issue["source_file"]
 
     if expected_label != "quick_command":
         return issue["source_file"]
@@ -1083,7 +1421,9 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
     if not issue_index:
         raise FileNotFoundError("未找到全部数据检查结果")
 
+    slot_map = command_slot_map(game)
     affected_commands: set[str] = set()
+    affected_global_negative = False
     pending_appends: dict[str, list[dict]] = {}
     results: list[dict] = []
 
@@ -1091,6 +1431,7 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
     for action in actions:
         sample_id = str(action.get("sample_id") or "").strip()
         action_name = str(action.get("action") or "").strip()
+        resolution_message = str(action.get("resolution_message") or "").strip()
         if not sample_id:
             raise ValueError("sample_id 不能为空")
         if action_name not in ACTION_TYPES:
@@ -1098,6 +1439,7 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
         issue = issue_index.get(sample_id)
         if not issue:
             raise ValueError(f"未找到 issue: {sample_id}")
+        effective_issue = build_effective_issue_for_action(issue, action)
 
         if action_name == ACTION_IGNORE:
             update_resolution_state(
@@ -1105,6 +1447,7 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
                 sample_id=sample_id,
                 status=RESOLUTION_IGNORED,
                 action=action_name,
+                message=resolution_message,
             )
             append_jsonl(
                 get_action_log_path(game),
@@ -1112,6 +1455,7 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
                     "sample_id": sample_id,
                     "action": action_name,
                     "status": RESOLUTION_IGNORED,
+                    "message": resolution_message,
                     "updated_at": utc_now_iso(),
                 },
             )
@@ -1120,14 +1464,16 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
                     "sample_id": sample_id,
                     "action": action_name,
                     "status": RESOLUTION_IGNORED,
+                    "message": resolution_message,
                 }
             )
             continue
 
         grouped_mutations.setdefault(issue["source_file"], []).append(
             {
-                "issue": issue,
+                "issue": effective_issue,
                 "action": action_name,
+                "message": resolution_message,
             }
         )
 
@@ -1184,12 +1530,21 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
             continue
 
         for current_index, issue, action_name in sorted(prepared, key=lambda item: item[0], reverse=True):
+            resolution_message = next(
+                (
+                    mutation.get("message", "")
+                    for mutation in mutations
+                    if mutation["issue"]["sample_id"] == issue["sample_id"]
+                    and mutation["action"] == action_name
+                ),
+                "",
+            )
             current_sample = rows[current_index]
             if action_name == ACTION_DELETE_SAMPLE:
                 rows.pop(current_index)
             else:
                 try:
-                    updated_sample = apply_expected_to_sample(current_sample, issue)
+                    updated_sample = apply_expected_to_sample(current_sample, issue, slot_map)
                     target_file = resolve_apply_target_file(game, issue, updated_sample)
                 except Exception as exc:
                     message = str(exc)
@@ -1218,12 +1573,15 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
                     target_command_id = normalize_command_id(updated_sample.get("command_id"))
                     if target_command_id:
                         affected_commands.add(target_command_id)
+                if issue.get("source_type") == "global_negative":
+                    affected_global_negative = True
 
             update_resolution_state(
                 game,
                 sample_id=issue["sample_id"],
                 status=RESOLUTION_APPLIED,
                 action=action_name,
+                message=resolution_message,
             )
             append_jsonl(
                 get_action_log_path(game),
@@ -1232,6 +1590,8 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
                     "action": action_name,
                     "status": RESOLUTION_APPLIED,
                     "source_file": issue["source_file"],
+                    "message": resolution_message,
+                    "expected_state": describe_expected_state(issue) if action_name == ACTION_APPLY_EXPECTED else "",
                     "updated_at": utc_now_iso(),
                 },
             )
@@ -1240,6 +1600,7 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
                     "sample_id": issue["sample_id"],
                     "action": action_name,
                     "status": RESOLUTION_APPLIED,
+                    "message": resolution_message,
                 }
             )
             source_command_id = issue.get("source_command_id")
@@ -1258,7 +1619,7 @@ def apply_full_check_actions(game: str, actions: list[dict]) -> dict:
         existing_rows.extend(appended_rows)
         write_jsonl(target_path, existing_rows)
 
-    if affected_commands or any(item["action"] == ACTION_DELETE_SAMPLE for item in results):
+    if affected_commands or affected_global_negative or any(item["action"] == ACTION_DELETE_SAMPLE for item in results):
         rebuild_command_outputs(game, affected_commands if affected_commands else None)
 
     summary = build_summary_payload(game)
@@ -1431,6 +1792,813 @@ def run_full_data_check(
     if summary["failed_batches"] > 0:
         print("  [WARN] 存在失败批次，可稍后继续未完成 / 失败批次")
     return summary
+
+
+def build_full_check_issue_review_prompt(
+    *,
+    game_background: str,
+    command_registry: str,
+    source_sample: dict,
+    issue: dict,
+) -> str:
+    template = load_issue_review_prompt_template()
+    prompt = template.replace("{{game_background}}", game_background)
+    prompt = prompt.replace("{{command_registry}}", command_registry)
+    prompt = prompt.replace("{{source_sample_json}}", json.dumps(source_sample, ensure_ascii=False, indent=2))
+    prompt = prompt.replace("{{issue_json}}", json.dumps(issue, ensure_ascii=False, indent=2))
+    return prompt
+
+
+def build_issue_review_manifest(
+    *,
+    game: str,
+    primary_model: str,
+    secondary_model: str,
+    think_mode: bool,
+    think_level: str,
+    full_check_manifest: dict,
+) -> dict:
+    return {
+        "version": ISSUE_REVIEW_VERSION,
+        "task_type": "full_check_issue_review",
+        "status": "running",
+        "game": game,
+        "model": primary_model,
+        "primary_model": primary_model,
+        "secondary_model": secondary_model,
+        "consensus_mode": REVIEW_CONSENSUS_MODE_STRICT_STRUCTURED_ACTION,
+        "think_mode": think_mode,
+        "think_level": think_level,
+        "dataset_fingerprint": full_check_manifest.get("dataset_fingerprint"),
+        "full_check_prompt_hash": full_check_manifest.get("prompt_hash"),
+        "full_check_total_issues": (read_json_file(get_summary_path(game), default={}) or {}).get("total_issues", 0),
+        "review_prompt_hash": sha1_text(load_issue_review_prompt_template()),
+        "created_at": utc_now_iso(),
+        "updated_at": utc_now_iso(),
+    }
+
+
+def validate_issue_review_resume(
+    manifest: dict,
+    *,
+    full_check_manifest: dict,
+    primary_model: str,
+    secondary_model: str,
+    think_mode: bool,
+    think_level: str,
+) -> None:
+    if manifest.get("dataset_fingerprint") != full_check_manifest.get("dataset_fingerprint"):
+        raise ValueError("全部数据检查数据集已变化，不能继续旧的 issue review，请勾选重新开始。")
+    if manifest.get("full_check_prompt_hash") != full_check_manifest.get("prompt_hash"):
+        raise ValueError("全部数据检查提示词版本已变化，不能继续旧的 issue review，请勾选重新开始。")
+    if manifest.get("model") != model:
+        raise ValueError("model 与现有 issue review 不一致，不能续跑，请勾选重新开始。")
+    if bool(manifest.get("think_mode")) != bool(think_mode):
+        raise ValueError("think_mode 与现有 issue review 不一致，不能续跑，请勾选重新开始。")
+    if manifest.get("think_level") != think_level:
+        raise ValueError("think_level 与现有 issue review 不一致，不能续跑，请勾选重新开始。")
+    if manifest.get("review_prompt_hash") != sha1_text(load_issue_review_prompt_template()):
+        raise ValueError("单样本复核提示词版本已变化，不能续跑，请勾选重新开始。")
+
+
+def prepare_full_check_issue_review_run(
+    *,
+    game: str,
+    model: str | None,
+    think_mode: bool,
+    think_level: str,
+    restart: bool,
+) -> dict:
+    full_check_manifest = load_manifest(game)
+    if not isinstance(full_check_manifest, dict):
+        raise FileNotFoundError("未找到全部数据检查结果，请先执行全部数据检查。")
+
+    review_dir = get_issue_review_dir(game)
+    if restart and review_dir.exists():
+        shutil.rmtree(review_dir)
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest = load_issue_review_manifest(game)
+    if manifest:
+        validate_issue_review_resume(
+            manifest,
+            full_check_manifest=full_check_manifest,
+            model=model,
+            think_mode=think_mode,
+            think_level=think_level,
+        )
+        return manifest
+
+    manifest = build_issue_review_manifest(
+        game=game,
+        model=model,
+        think_mode=think_mode,
+        think_level=think_level,
+        full_check_manifest=full_check_manifest,
+    )
+    write_issue_review_manifest(game, manifest)
+    return manifest
+
+
+def resolve_issue_review_models(
+    *,
+    primary_model: str | None,
+    secondary_model: str | None,
+) -> tuple[str, str]:
+    available_models = get_available_models()
+    resolved_primary = (primary_model or "").strip()
+    resolved_secondary = (secondary_model or "").strip()
+
+    if not resolved_primary:
+        raise ValueError("问题样本复核必须指定主模型。")
+    if not resolved_secondary:
+        raise ValueError("问题样本复核必须指定副模型。")
+    if resolved_primary == resolved_secondary:
+        raise ValueError("问题样本复核要求主模型和副模型不同。")
+    if available_models:
+        if resolved_primary not in available_models:
+            raise ValueError(f"主模型不在可用列表中: {resolved_primary}")
+        if resolved_secondary not in available_models:
+            raise ValueError(f"副模型不在可用列表中: {resolved_secondary}")
+    return resolved_primary, resolved_secondary
+
+
+def validate_issue_review_resume_dual_model(
+    manifest: dict,
+    *,
+    full_check_manifest: dict,
+    primary_model: str,
+    secondary_model: str,
+    think_mode: bool,
+    think_level: str,
+) -> None:
+    if int(manifest.get("version") or 0) < ISSUE_REVIEW_VERSION:
+        raise ValueError("现有 issue review 为旧版单模型工件，不能续跑，请勾选重新开始。")
+    if manifest.get("dataset_fingerprint") != full_check_manifest.get("dataset_fingerprint"):
+        raise ValueError("全部数据检查数据集已变化，不能继续旧的 issue review，请勾选重新开始。")
+    if manifest.get("full_check_prompt_hash") != full_check_manifest.get("prompt_hash"):
+        raise ValueError("全部数据检查提示词版本已变化，不能继续旧的 issue review，请勾选重新开始。")
+    if manifest.get("model") != primary_model or manifest.get("primary_model") != primary_model:
+        raise ValueError("主模型与现有 issue review 不一致，不能续跑，请勾选重新开始。")
+    if manifest.get("secondary_model") != secondary_model:
+        raise ValueError("副模型与现有 issue review 不一致，不能续跑，请勾选重新开始。")
+    if manifest.get("consensus_mode") != REVIEW_CONSENSUS_MODE_STRICT_STRUCTURED_ACTION:
+        raise ValueError("issue review 共识模式已变化，不能续跑，请勾选重新开始。")
+    if bool(manifest.get("think_mode")) != bool(think_mode):
+        raise ValueError("think_mode 与现有 issue review 不一致，不能续跑，请勾选重新开始。")
+    if manifest.get("think_level") != think_level:
+        raise ValueError("think_level 与现有 issue review 不一致，不能续跑，请勾选重新开始。")
+    if manifest.get("review_prompt_hash") != sha1_text(load_issue_review_prompt_template()):
+        raise ValueError("单样本复核提示词版本已变化，不能续跑，请勾选重新开始。")
+
+
+def prepare_full_check_issue_review_run_dual_model(
+    *,
+    game: str,
+    primary_model: str,
+    secondary_model: str,
+    think_mode: bool,
+    think_level: str,
+    restart: bool,
+) -> dict:
+    full_check_manifest = load_manifest(game)
+    if not isinstance(full_check_manifest, dict):
+        raise FileNotFoundError("未找到全部数据检查结果，请先执行全部数据检查。")
+
+    review_dir = get_issue_review_dir(game)
+    if restart and review_dir.exists():
+        shutil.rmtree(review_dir)
+    review_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest = load_issue_review_manifest(game)
+    if manifest:
+        validate_issue_review_resume_dual_model(
+            manifest,
+            full_check_manifest=full_check_manifest,
+            primary_model=primary_model,
+            secondary_model=secondary_model,
+            think_mode=think_mode,
+            think_level=think_level,
+        )
+        return manifest
+
+    manifest = build_issue_review_manifest(
+        game=game,
+        primary_model=primary_model,
+        secondary_model=secondary_model,
+        think_mode=think_mode,
+        think_level=think_level,
+        full_check_manifest=full_check_manifest,
+    )
+    write_issue_review_manifest(game, manifest)
+    return manifest
+
+
+def normalize_issue_review_result(issue: dict, raw_result: dict) -> dict:
+    decision = str(raw_result.get("decision") or "").strip()
+    if decision not in REVIEW_DECISIONS:
+        decision = REVIEW_DECISION_PENDING_CONFIRMATION
+
+    action = str(raw_result.get("action") or REVIEW_ACTION_NONE).strip()
+    if action not in REVIEW_ACTIONS:
+        action = REVIEW_ACTION_NONE
+
+    confidence = str(raw_result.get("confidence") or "low").strip().lower()
+    if confidence not in REVIEW_CONFIDENCE_LEVELS:
+        confidence = "low"
+
+    final_label = str(raw_result.get("final_label") or "").strip() or None
+    if final_label not in VALID_SAMPLE_LABELS:
+        final_label = None
+
+    final_command_id = normalize_command_id(raw_result.get("final_command_id")) or None
+    final_slots = normalize_slots(raw_result.get("final_slots"))
+    final_bucket = normalize_bucket(raw_result.get("final_bucket")) or None
+    reason = str(raw_result.get("reason") or "").strip()
+    pending_reason = str(raw_result.get("pending_reason") or "").strip()
+    raw_notes = raw_result.get("safety_notes")
+    safety_notes = [
+        str(item).strip()
+        for item in (raw_notes if isinstance(raw_notes, list) else [])
+        if str(item).strip()
+    ]
+
+    if action == REVIEW_ACTION_NONE and decision == REVIEW_DECISION_AUTO_PROCESS:
+        decision = REVIEW_DECISION_PENDING_CONFIRMATION
+        pending_reason = pending_reason or "未提供可自动执行的动作。"
+
+    if decision == REVIEW_DECISION_AUTO_PROCESS and confidence != "high":
+        decision = REVIEW_DECISION_PENDING_CONFIRMATION
+        pending_reason = pending_reason or "置信度不足，不能自动处理。"
+        action = REVIEW_ACTION_NONE
+
+    if action == ACTION_DELETE_SAMPLE:
+        final_label = None
+        final_command_id = None
+        final_slots = {}
+        final_bucket = None
+
+    if action == ACTION_IGNORE:
+        final_label = final_label or issue.get("current_label")
+        final_command_id = final_command_id or normalize_command_id(issue.get("current_command_id")) or None
+        final_slots = final_slots or normalize_slots(issue.get("current_slots"))
+        final_bucket = final_bucket or normalize_bucket(issue.get("current_bucket")) or None
+
+    if final_label != "quick_command":
+        final_command_id = None
+        final_slots = {}
+
+    if issue.get("source_type") != "global_negative":
+        final_bucket = None
+
+    return {
+        "decision": decision,
+        "action": action,
+        "confidence": confidence,
+        "final_label": final_label,
+        "final_command_id": final_command_id,
+        "final_slots": final_slots,
+        "final_bucket": final_bucket,
+        "reason": reason,
+        "pending_reason": pending_reason,
+        "safety_notes": safety_notes,
+    }
+
+
+def review_matches_current_state(issue: dict, review_result: dict) -> bool:
+    return (
+        review_result.get("final_label") == issue.get("current_label")
+        and normalize_command_id(review_result.get("final_command_id")) == normalize_command_id(issue.get("current_command_id"))
+        and normalize_slots(review_result.get("final_slots")) == normalize_slots(issue.get("current_slots"))
+        and normalize_bucket(review_result.get("final_bucket")) == normalize_bucket(issue.get("current_bucket"))
+    )
+
+
+def build_auto_action_from_review(issue: dict, review_result: dict) -> tuple[dict | None, str]:
+    if review_result["decision"] != REVIEW_DECISION_AUTO_PROCESS:
+        return None, review_result.get("pending_reason") or "该样本需要人工确认。"
+
+    action = review_result["action"]
+    reason = review_result.get("reason") or ""
+    source_type = str(issue.get("source_type") or "")
+
+    if action == ACTION_IGNORE:
+        if not review_matches_current_state(issue, review_result):
+            return None, "复核结果选择 ignore，但最终状态与当前样本不一致。"
+        return {
+            "sample_id": issue["sample_id"],
+            "action": ACTION_IGNORE,
+            "resolution_message": reason,
+        }, ""
+
+    if action == ACTION_DELETE_SAMPLE:
+        return {
+            "sample_id": issue["sample_id"],
+            "action": ACTION_DELETE_SAMPLE,
+            "resolution_message": reason,
+        }, ""
+
+    if action != ACTION_APPLY_EXPECTED:
+        return None, "未提供受支持的自动处理动作。"
+
+    final_label = review_result.get("final_label")
+    if final_label not in VALID_SAMPLE_LABELS:
+        return None, "apply_expected 缺少有效的 final_label。"
+
+    if review_matches_current_state(issue, review_result):
+        return None, "apply_expected 未产生任何实际改动。"
+
+    payload = {
+        "sample_id": issue["sample_id"],
+        "action": ACTION_APPLY_EXPECTED,
+        "expected_label": final_label,
+        "resolution_message": reason,
+    }
+
+    if source_type == "global_negative":
+        if final_label == "quick_command":
+            return None, "global_negative 判为 quick_command 时不能自动迁移，需人工确认。"
+        final_bucket = normalize_bucket(review_result.get("final_bucket"))
+        if not final_bucket:
+            return None, "global_negative 缺少 final_bucket，不能自动处理。"
+        try:
+            validate_global_negative_bucket(final_label, final_bucket)
+        except ValueError as exc:
+            return None, str(exc)
+        payload["expected_bucket"] = final_bucket
+        return payload, ""
+
+    if final_label == "quick_command":
+        expected_command_id = normalize_command_id(review_result.get("final_command_id"))
+        expected_slots = normalize_slots(review_result.get("final_slots"))
+        if not expected_command_id:
+            return None, "quick_command 缺少 final_command_id。"
+        if not expected_slots:
+            return None, "quick_command 缺少 final_slots。"
+        payload["expected_command_id"] = expected_command_id
+        payload["expected_slots"] = expected_slots
+
+    return payload, ""
+
+
+def build_pending_review_result(reason: str) -> dict:
+    return {
+        "decision": REVIEW_DECISION_PENDING_CONFIRMATION,
+        "action": REVIEW_ACTION_NONE,
+        "confidence": "low",
+        "final_label": None,
+        "final_command_id": None,
+        "final_slots": {},
+        "final_bucket": None,
+        "reason": "",
+        "pending_reason": reason,
+        "safety_notes": [],
+    }
+
+
+def normalize_review_action_payload(payload: dict | None) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    action = str(payload.get("action") or "").strip()
+    if action not in ACTION_TYPES:
+        return None
+
+    normalized = {
+        "action": action,
+        "expected_label": None,
+        "expected_command_id": None,
+        "expected_slots": {},
+        "expected_bucket": None,
+    }
+    if action != ACTION_APPLY_EXPECTED:
+        return normalized
+
+    expected_label = str(payload.get("expected_label") or "").strip() or None
+    if expected_label not in VALID_SAMPLE_LABELS:
+        return None
+    normalized["expected_label"] = expected_label
+
+    if expected_label == "quick_command":
+        normalized["expected_command_id"] = normalize_command_id(payload.get("expected_command_id")) or None
+        normalized["expected_slots"] = normalize_slots(payload.get("expected_slots"))
+    normalized["expected_bucket"] = normalize_bucket(payload.get("expected_bucket")) or None
+    return normalized
+
+
+def compare_normalized_review_actions(
+    left: dict | None,
+    right: dict | None,
+) -> list[str]:
+    if left is None or right is None:
+        if left == right:
+            return []
+        return ["decision", "action"]
+
+    mismatches: list[str] = []
+    for key in ("action", "expected_label", "expected_command_id", "expected_slots", "expected_bucket"):
+        if left.get(key) != right.get(key):
+            mismatches.append(key)
+    return mismatches
+
+
+def confidence_to_rank(confidence: str | None) -> int:
+    return REVIEW_CONFIDENCE_RANKS.get(str(confidence or "").strip().lower(), 0)
+
+
+def rank_to_confidence(rank: int) -> str:
+    if rank >= REVIEW_CONFIDENCE_RANKS["high"]:
+        return "high"
+    if rank >= REVIEW_CONFIDENCE_RANKS["medium"]:
+        return "medium"
+    return "low"
+
+
+def merge_pending_confidence(primary_review: dict | None, secondary_review: dict | None) -> str:
+    ranks = [
+        confidence_to_rank((primary_review or {}).get("confidence")),
+        confidence_to_rank((secondary_review or {}).get("confidence")),
+    ]
+    return rank_to_confidence(min(ranks))
+
+
+def build_review_detail_payload(
+    *,
+    model: str,
+    review_result: dict,
+    demotion_reason: str = "",
+    error_message: str = "",
+) -> dict:
+    return {
+        "model": model,
+        "decision": review_result.get("decision"),
+        "action": review_result.get("action"),
+        "confidence": review_result.get("confidence"),
+        "final_label": review_result.get("final_label"),
+        "final_command_id": review_result.get("final_command_id"),
+        "final_slots": normalize_slots(review_result.get("final_slots")),
+        "final_bucket": normalize_bucket(review_result.get("final_bucket")) or None,
+        "reason": review_result.get("reason", ""),
+        "pending_reason": review_result.get("pending_reason", ""),
+        "safety_notes": review_result.get("safety_notes", []),
+        "demotion_reason": demotion_reason,
+        "error_message": error_message,
+    }
+
+
+def evaluate_single_issue_review(
+    *,
+    issue: dict,
+    prompt: str,
+    model: str,
+    think_mode: bool,
+    think_level: str,
+) -> dict:
+    demotion_reason = ""
+    error_message = ""
+    try:
+        raw_result = call_llm_json(
+            prompt,
+            model=model,
+            temperature=0.2,
+            max_tokens=12000,
+            think_mode=think_mode,
+            think_level=think_level,
+        )
+        if not isinstance(raw_result, dict):
+            raise ValueError("issue review 返回不是 JSON 对象")
+        review_result = normalize_issue_review_result(issue, raw_result)
+    except Exception as exc:
+        error_message = f"LLM 复核失败: {exc}"
+        review_result = build_pending_review_result(error_message)
+
+    action_payload, demotion_reason = build_auto_action_from_review(issue, review_result)
+    if not action_payload:
+        review_result["decision"] = REVIEW_DECISION_PENDING_CONFIRMATION
+        review_result["action"] = REVIEW_ACTION_NONE
+        review_result["pending_reason"] = review_result.get("pending_reason") or demotion_reason or "需要人工确认。"
+
+    return {
+        "model": model,
+        "review_result": review_result,
+        "action_payload": action_payload,
+        "normalized_action": normalize_review_action_payload(action_payload),
+        "demotion_reason": demotion_reason,
+        "error_message": error_message,
+        "detail": build_review_detail_payload(
+            model=model,
+            review_result=review_result,
+            demotion_reason=demotion_reason,
+            error_message=error_message,
+        ),
+    }
+
+
+def build_consensus_reason(primary_review: dict, secondary_review: dict) -> str:
+    primary_reason = str(primary_review.get("reason") or "").strip()
+    secondary_reason = str(secondary_review.get("reason") or "").strip()
+    if primary_reason and secondary_reason and primary_reason != secondary_reason:
+        return f"双模型结构化自动动作一致。{primary_review.get('model')}: {primary_reason} | {secondary_review.get('model')}: {secondary_reason}"
+    if primary_reason:
+        return f"双模型结构化自动动作一致。{primary_reason}"
+    if secondary_reason:
+        return f"双模型结构化自动动作一致。{secondary_reason}"
+    return "双模型结构化自动动作一致。"
+
+
+def build_pending_consensus_reason(
+    *,
+    agreement_status: str,
+    primary_review: dict | None,
+    secondary_review: dict | None,
+    disagreement_fields: list[str],
+) -> str:
+    if agreement_status == REVIEW_AGREEMENT_BOTH_ERROR:
+        return "双模型复核均失败，不能自动处理。"
+    if agreement_status == REVIEW_AGREEMENT_PRIMARY_ERROR:
+        return "主模型复核失败，不能自动处理。"
+    if agreement_status == REVIEW_AGREEMENT_SECONDARY_ERROR:
+        return "副模型复核失败，不能自动处理。"
+    if agreement_status == REVIEW_AGREEMENT_MISMATCH:
+        fields = ", ".join(disagreement_fields) or "action"
+        return f"双模型复核结论不一致，不能自动处理。冲突字段: {fields}"
+    if primary_review is None and secondary_review is None:
+        return "缺少可安全复核的数据集快照，不能自动处理。"
+    return "双模型均判定该样本仍需人工确认。"
+
+
+def build_consensus_review_result(
+    *,
+    issue: dict,
+    primary_eval: dict | None,
+    secondary_eval: dict | None,
+) -> tuple[dict, dict | None]:
+    primary_review = primary_eval["review_result"] if primary_eval else None
+    secondary_review = secondary_eval["review_result"] if secondary_eval else None
+    primary_error = str((primary_eval or {}).get("error_message") or "").strip()
+    secondary_error = str((secondary_eval or {}).get("error_message") or "").strip()
+
+    if primary_error and secondary_error:
+        agreement_status = REVIEW_AGREEMENT_BOTH_ERROR
+    elif primary_error:
+        agreement_status = REVIEW_AGREEMENT_PRIMARY_ERROR
+    elif secondary_error:
+        agreement_status = REVIEW_AGREEMENT_SECONDARY_ERROR
+    else:
+        primary_action = (primary_eval or {}).get("normalized_action")
+        secondary_action = (secondary_eval or {}).get("normalized_action")
+        if primary_action and secondary_action:
+            disagreement_fields = compare_normalized_review_actions(primary_action, secondary_action)
+            if not disagreement_fields:
+                consensus_result = dict(primary_review or {})
+                consensus_result["decision"] = REVIEW_DECISION_AUTO_PROCESS
+                consensus_result["action"] = primary_action["action"]
+                consensus_result["confidence"] = "high"
+                consensus_result["reason"] = build_consensus_reason(
+                    primary_eval["detail"],
+                    secondary_eval["detail"],
+                )
+                consensus_result["pending_reason"] = ""
+                return {
+                    **consensus_result,
+                    "agreement_status": REVIEW_AGREEMENT_AGREED_AUTO_PROCESS,
+                    "disagreement_fields": [],
+                }, dict((primary_eval or {}).get("action_payload") or {})
+            agreement_status = REVIEW_AGREEMENT_MISMATCH
+        elif primary_action or secondary_action:
+            agreement_status = REVIEW_AGREEMENT_MISMATCH
+            disagreement_fields = ["decision", "action"]
+        else:
+            agreement_status = REVIEW_AGREEMENT_AGREED_PENDING_CONFIRMATION
+            disagreement_fields = []
+
+        if agreement_status == REVIEW_AGREEMENT_AGREED_PENDING_CONFIRMATION:
+            return {
+                **build_pending_review_result(
+                    build_pending_consensus_reason(
+                        agreement_status=agreement_status,
+                        primary_review=(primary_eval or {}).get("detail"),
+                        secondary_review=(secondary_eval or {}).get("detail"),
+                        disagreement_fields=[],
+                    )
+                ),
+                "confidence": merge_pending_confidence(primary_review, secondary_review),
+                "agreement_status": agreement_status,
+                "disagreement_fields": [],
+            }, None
+
+        return {
+            **build_pending_review_result(
+                build_pending_consensus_reason(
+                    agreement_status=agreement_status,
+                    primary_review=(primary_eval or {}).get("detail"),
+                    secondary_review=(secondary_eval or {}).get("detail"),
+                    disagreement_fields=disagreement_fields,
+                )
+            ),
+            "agreement_status": agreement_status,
+            "disagreement_fields": disagreement_fields,
+        }, None
+
+    return {
+        **build_pending_review_result(
+            build_pending_consensus_reason(
+                agreement_status=agreement_status,
+                primary_review=(primary_eval or {}).get("detail"),
+                secondary_review=(secondary_eval or {}).get("detail"),
+                disagreement_fields=[],
+            )
+        ),
+        "agreement_status": agreement_status,
+        "disagreement_fields": [],
+    }, None
+
+
+def run_full_check_issue_review(
+    *,
+    game: str = "mmorpg",
+    model: str | None = None,
+    secondary_model: str | None = None,
+    restart: bool = False,
+    think_mode: bool = False,
+    think_level: str = "high",
+    limit: int | None = None,
+) -> dict:
+    primary_model, secondary_model = resolve_issue_review_models(
+        primary_model=model,
+        secondary_model=secondary_model,
+    )
+
+    print(f"\n{'=' * 60}")
+    print(f"  Step 1: 准备 issue review ({game})")
+    print(f"{'=' * 60}")
+
+    manifest = prepare_full_check_issue_review_run_dual_model(
+        game=game,
+        primary_model=primary_model,
+        secondary_model=secondary_model,
+        think_mode=think_mode,
+        think_level=think_level,
+        restart=restart,
+    )
+    manifest["status"] = "running"
+    write_issue_review_manifest(game, manifest)
+
+    commands_path = PROJECT_DIR / "commands" / f"{game}.json"
+    if not commands_path.exists():
+        raise FileNotFoundError(f"Commands 文件不存在: {commands_path}")
+
+    issue_index = build_issue_index(game)
+    resolution_state = load_resolution_state(game)
+    review_state = load_issue_review_map(game)
+    snapshot_rows = {
+        row.get("sample_id"): row
+        for row in load_snapshot_rows(game)
+        if isinstance(row, dict) and row.get("sample_id")
+    }
+    pending_issues = [
+        merge_issue_resolution_state(issue, resolution_state)
+        for issue in issue_index.values()
+        if resolution_state.get(issue["sample_id"], {}).get("status", RESOLUTION_PENDING) in {RESOLUTION_PENDING, RESOLUTION_CONFLICT}
+        and issue["sample_id"] not in review_state
+    ]
+    pending_issues.sort(key=lambda item: (item.get("dataset_index", 0), item.get("batch_index", 0)))
+    if limit is not None and limit > 0:
+        pending_issues = pending_issues[:limit]
+
+    summary = build_issue_review_summary_payload(game)
+    print(f"  待复核 issue: {len(pending_issues)}")
+    print(f"  结果目录: {get_issue_review_dir(game)}")
+    print(f"  模型对: {primary_model} x {secondary_model}")
+    if summary:
+        print(f"  已有复核记录: {summary.get('reviewed_total', 0)}")
+
+    if not pending_issues:
+        manifest["status"] = "completed"
+        write_issue_review_manifest(game, manifest)
+        final_summary = build_issue_review_summary_payload(game)
+        return {
+            "status": "completed",
+            "summary": final_summary,
+            "processed": 0,
+        }
+
+    command_registry = compact_file(str(commands_path))
+    game_background = discover_game_background(game)
+
+    print(f"\n{'=' * 60}")
+    print("  Step 2: 逐条复核并自动处理")
+    print(f"{'=' * 60}")
+
+    processed = 0
+    for index, issue in enumerate(pending_issues, start=1):
+        sample_id = issue["sample_id"]
+        snapshot_row = snapshot_rows.get(sample_id)
+        if not isinstance(snapshot_row, dict):
+            review_entry = {
+                "sample_id": sample_id,
+                "dataset_index": issue.get("dataset_index"),
+                "source_type": issue.get("source_type"),
+                **build_pending_review_result("未找到对应的数据集快照，无法安全复核。"),
+                "primary_model": primary_model,
+                "secondary_model": secondary_model,
+                "primary_review": None,
+                "secondary_review": None,
+                "agreement_status": REVIEW_AGREEMENT_AGREED_PENDING_CONFIRMATION,
+                "disagreement_fields": [],
+                "execution_status": REVIEW_DECISION_PENDING_CONFIRMATION,
+                "execution_message": "",
+                "updated_at": utc_now_iso(),
+            }
+            append_jsonl(get_issue_review_log_path(game), review_entry)
+            build_issue_review_summary_payload(game)
+            print(f"  [{index}/{len(pending_issues)}] #{issue.get('dataset_index', '-')} 待确认: 缺少快照")
+            processed += 1
+            continue
+
+        source_sample = snapshot_row.get("sample")
+        prompt = build_full_check_issue_review_prompt(
+            game_background=game_background,
+            command_registry=command_registry,
+            source_sample=source_sample,
+            issue=issue,
+        )
+
+        primary_eval = evaluate_single_issue_review(
+            issue=issue,
+            prompt=prompt,
+            model=primary_model,
+            think_mode=think_mode,
+            think_level=think_level,
+        )
+        secondary_eval = evaluate_single_issue_review(
+            issue=issue,
+            prompt=prompt,
+            model=secondary_model,
+            think_mode=think_mode,
+            think_level=think_level,
+        )
+        review_result, action_payload = build_consensus_review_result(
+            issue=issue,
+            primary_eval=primary_eval,
+            secondary_eval=secondary_eval,
+        )
+
+        review_entry = {
+            "sample_id": sample_id,
+            "dataset_index": issue.get("dataset_index"),
+            "source_type": issue.get("source_type"),
+            **review_result,
+            "primary_model": primary_model,
+            "secondary_model": secondary_model,
+            "primary_review": primary_eval["detail"],
+            "secondary_review": secondary_eval["detail"],
+            "execution_status": REVIEW_DECISION_PENDING_CONFIRMATION,
+            "execution_message": "",
+            "updated_at": utc_now_iso(),
+        }
+
+        if action_payload:
+            action_payload = dict(action_payload)
+            action_payload["resolution_message"] = review_result.get("reason") or action_payload.get("resolution_message", "")
+            action_result = apply_full_check_actions(game, [action_payload])
+            result_items = action_result.get("results", [])
+            first_result = result_items[0] if result_items else {}
+            review_entry["execution_status"] = first_result.get("status", "")
+            review_entry["execution_message"] = first_result.get("message", "")
+        else:
+            review_entry["execution_status"] = REVIEW_DECISION_PENDING_CONFIRMATION
+
+        append_jsonl(get_issue_review_log_path(game), review_entry)
+        build_issue_review_summary_payload(game)
+        processed += 1
+
+        state_label = review_entry["execution_status"] or review_entry["decision"]
+        print(
+            f"  [{index}/{len(pending_issues)}] "
+            f"#{issue.get('dataset_index', '-')} -> {state_label}"
+        )
+
+    print(f"\n{'=' * 60}")
+    print("  Step 3: 汇总复核结果")
+    print(f"{'=' * 60}")
+    final_summary = build_issue_review_summary_payload(game)
+    manifest["status"] = "completed"
+    write_issue_review_manifest(game, manifest)
+    print(
+        "  [OK] "
+        f"已复核: {final_summary.get('reviewed_total', 0)} "
+        f"| 自动处理: {final_summary.get('auto_processed', 0)} "
+        f"| 待确认: {final_summary.get('pending_confirmation', 0)} "
+        f"| 双模型一致自动: {final_summary.get('dual_model_agree_auto', 0)} "
+        f"| 双模型冲突: {final_summary.get('dual_model_disagree', 0)} "
+        f"| 冲突: {final_summary.get('apply_conflicts', 0)}"
+    )
+    print(f"  [OK] 摘要已保存到: {get_issue_review_summary_path(game)}")
+    return {
+        "status": "completed",
+        "summary": final_summary,
+        "processed": processed,
+    }
 
 
 def main() -> None:

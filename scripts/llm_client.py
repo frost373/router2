@@ -18,7 +18,7 @@ _DEFAULT_MODEL = "deepseek-v3.2"
 _DEFAULT_MAX_TOKENS = 32000
 _JSON_RETRY_MAX_TOKENS = 32000
 _THINKING_MAX_TOKENS = {
-    "low": 18000,
+    "low": 8000,
     "medium": 24000,
     "high": 32000,
 }

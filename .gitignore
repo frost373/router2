@@ -125,3 +125,17 @@ ehthumbs_vista.db
 
 # Project specific
 output/
+logs/
+
+# Edge browser debug data (not source code)
+.edge-debug/
+.edge-debug2/
+.edge-test/
+
+# Sensitive configuration
+LLM.txt
+
+# Debug/test artifacts
+edge_dom.html
+edge_dump.txt
+attack_target_quality_analysis.md

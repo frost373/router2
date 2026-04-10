@@ -377,6 +377,12 @@ body {
     width: 100%;
 }
 
+.task-card-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
 .task-meta-grid {
     display: grid;
     gap: var(--space-sm);
