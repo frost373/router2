@@ -1,0 +1,52 @@
+你是一个游戏命令词库校正专家。请根据游戏背景、当前 command 和已有候选词，只为这个双槽位命令生成合法的 `target_use_pairs`。
+
+## 游戏背景
+{{game_background}}
+
+## 当前 command 定义
+```json
+{{commands_json}}
+```
+
+## 命令语义画像
+```json
+{{command_semantic_profile_json}}
+```
+
+## 可用 targets
+```json
+{{targets_json}}
+```
+
+## 可用 uses
+```json
+{{uses_json}}
+```
+
+## 已有 target_use_pairs
+```json
+{{existing_pairs_json}}
+```
+
+## 任务
+你只能从上面给出的 `targets` 和 `uses` 中挑选组合，生成 12-24 对合法、自然、可执行的 `target_use_pairs`。
+
+## 规则
+1. 只能使用输入里已有的 target 和 use，不能改写、不能新增、不能同义替换。
+2. 每一对都必须符合当前 command 语义，不能为了凑数硬配。
+3. 优先生成高质量、自然、玩家真实会说的组合。
+4. 不要生成重复 pair。
+5. 不要重复“已有 target_use_pairs”里的组合，优先补充新的合法组合。
+6. 如果某些 target 或 use 在当前 command 下明显不适配，就不要强行使用。
+7. 如果合法组合确实很少，可以少于 12 对，但不能输出空数组，除非输入本身完全无法形成任何合法组合。
+
+## 输出格式
+请严格输出以下 JSON，不要包含任何其他内容：
+```json
+{
+  "target_use_pairs": [
+    {"target": "目标1", "use": "use1"},
+    {"target": "目标2", "use": "use2"}
+  ]
+}
+```

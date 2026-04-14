@@ -37,9 +37,13 @@ def load_expanded_aliases(game: str, command_id: str | None = None) -> dict:
     result = {}
     if command_id:
         path = os.path.join(game_dir, command_id, "aliases.json")
+        if not os.path.isfile(path):
+            return result
         with open(path, "r", encoding="utf-8") as f:
             result.update(json.load(f))
     else:
+        if not os.path.isdir(game_dir):
+            return result
         for cid_dir in os.listdir(game_dir):
             alias_path = os.path.join(game_dir, cid_dir, "aliases.json")
             if os.path.isfile(alias_path):
@@ -51,6 +55,20 @@ def load_expanded_aliases(game: str, command_id: str | None = None) -> dict:
 def get_slot_names(cmd: dict) -> list[str]:
     """获取 command 的 slot name 列表"""
     return [s["name"] for s in cmd.get("slots", [])]
+
+
+def ensure_vocab_requirements(command_id: str, slot_names: list[str], vocab: dict) -> None:
+    """Validate that the loaded vocab can satisfy current slot filling needs."""
+    targets = vocab.get("targets", [])
+    uses = vocab.get("uses", [])
+    pairs = vocab.get("target_use_pairs", [])
+
+    if "target" in slot_names and not targets:
+        raise ValueError(f"{command_id} 需要 target 词库，但 vocab.json 中 targets 为空")
+    if "use" in slot_names and not uses:
+        raise ValueError(f"{command_id} 需要 use 词库，但 vocab.json 中 uses 为空")
+    if {"target", "use"}.issubset(slot_names) and not pairs:
+        raise ValueError(f"{command_id} 是双槽位命令，但 vocab.json 中 target_use_pairs 为空")
 
 
 def fill_template(
@@ -66,15 +84,11 @@ def fill_template(
     text = template
 
     if "target" in slot_names and "use" in slot_names:
-        # 双参数：优先使用配对
+        # 双参数：必须使用合法配对，禁止随机拼接 target + use
         pairs = vocab.get("target_use_pairs", [])
-        if pairs:
-            pair = random.choice(pairs)
-            target_val = pair["target"]
-            use_val = pair["use"]
-        else:
-            target_val = random.choice(vocab["targets"])
-            use_val = random.choice(vocab["uses"])
+        pair = random.choice(pairs)
+        target_val = pair["target"]
+        use_val = pair["use"]
         text = text.replace("{target}", target_val)
         text = text.replace("{use}", use_val)
         slots_filled["target"] = target_val
@@ -126,6 +140,8 @@ def generate_template_samples(
         slot_names = get_slot_names(cmd)
         
         vocab = load_vocab(game, cid) if slot_names else {}
+        if slot_names:
+            ensure_vocab_requirements(cid, slot_names, vocab)
 
         # 获取该 command 的所有别名模板
         if cid in aliases_data:
@@ -172,6 +188,7 @@ def generate_template_samples(
     for s in all_samples:
         by_cmd.setdefault(s["command_id"], []).append(s)
 
+    last_out_path: str | None = None
     for cid, samples_list in by_cmd.items():
         cmd_dir = os.path.join(PROJECT_DIR, "output", game, cid)
         os.makedirs(cmd_dir, exist_ok=True)
@@ -179,9 +196,11 @@ def generate_template_samples(
         with open(out_path, "w", encoding="utf-8") as f:
             for s in samples_list:
                 f.write(json.dumps(s, ensure_ascii=False) + "\n")
+        last_out_path = out_path
 
     print(f"\n  [OK] 总计 {len(all_samples)} 条模板样本")
-    print(f"     保存到: {out_path}")
+    if last_out_path:
+        print(f"     保存到: {last_out_path}")
     return all_samples
 
 

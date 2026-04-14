@@ -11,6 +11,8 @@ import json
 import os
 import sys
 
+from game_context import DEFAULT_GAME_BACKGROUNDS, load_game_background
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(SCRIPT_DIR)
 
@@ -28,12 +30,8 @@ DEFAULT_SAMPLE_PLAN = {
     "chat_out_of_game": 4,
 }
 
-# 默认游戏背景（MMORPG）
-DEFAULT_GAME_BACKGROUND = (
-    "这是一款经典的东方玄幻/魔幻MMORPG，包含战士、法师、牧师、射手等职业，"
-    "有副本、野外、PVP等场景。玩家可以组队挑战地下城、世界boss、竞技场等。"
-    "AI队友是一个可以接受玩家语音/文字命令的智能NPC队友。"
-)
+# 兼容旧调用方保留的默认背景常量
+DEFAULT_GAME_BACKGROUND = DEFAULT_GAME_BACKGROUNDS.get("mmorpg", "")
 
 
 def load_prompt_template() -> str:
@@ -164,7 +162,7 @@ def generate_global_negatives(
 
     # 加载参数
     plan = sample_plan or DEFAULT_SAMPLE_PLAN
-    bg = game_background or DEFAULT_GAME_BACKGROUND
+    bg = game_background or load_game_background(game) or DEFAULT_GAME_BACKGROUND
     template = load_prompt_template()
 
     total_per_round = sum(plan.values())

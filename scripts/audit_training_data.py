@@ -14,7 +14,7 @@ from collections import Counter
 from typing import Any
 
 from command_registry_compact import compact_file, load_commands
-from generate_global_negatives import DEFAULT_GAME_BACKGROUND
+from game_context import discover_game_background
 from llm_client import call_llm_json
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -201,29 +201,6 @@ def build_batch_context(
         "batch_label_distribution": dict(sorted(label_counts.items())),
         "batch_source_type_distribution": dict(sorted(source_type_counts.items())),
     }
-
-
-def discover_game_background(game: str) -> str:
-    """尽量从现有产物中发现游戏背景，没有则回退默认值。"""
-    game_dir = os.path.join(PROJECT_DIR, "output", game)
-
-    txt_path = os.path.join(game_dir, "game_background.txt")
-    if os.path.isfile(txt_path):
-        with open(txt_path, "r", encoding="utf-8") as f:
-            return f.read().strip()
-
-    json_path = os.path.join(game_dir, "audit_context.json")
-    if os.path.isfile(json_path):
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            value = data.get("game_background", "")
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-    if game == "mmorpg":
-        return DEFAULT_GAME_BACKGROUND
-    return ""
 
 
 def build_prompt(

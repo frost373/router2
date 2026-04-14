@@ -10,6 +10,8 @@ import re
 import sys
 import os
 
+from game_context import ALLOWED_TARGET_KINDS, ALLOWED_USE_KINDS
+
 # ── 规则常量 ──────────────────────────────────────────────
 ALLOWED_SLOT_NAMES = {"use", "target"}
 ALLOWED_SLOT_TYPES = {"use_span", "target_span"}
@@ -21,6 +23,28 @@ MAX_COMMANDS = 25
 MIN_ALIASES = 3
 MAX_ALIASES = 6
 MAX_SLOTS = 2
+
+
+def _validate_hint_string_list(
+    cmd_prefix: str,
+    field_name: str,
+    raw_value: object,
+    allowed_values: set[str] | None,
+    errors: list[str],
+):
+    if not isinstance(raw_value, list):
+        errors.append(f"{cmd_prefix}.{field_name}: 必须是字符串数组")
+        return
+
+    for idx, item in enumerate(raw_value):
+        if not isinstance(item, str) or not item.strip():
+            errors.append(f"{cmd_prefix}.{field_name}[{idx}]: 必须是非空字符串")
+            continue
+        if allowed_values is not None and item not in allowed_values:
+            errors.append(
+                f"{cmd_prefix}.{field_name}[{idx}]: 值 '{item}' 非法，"
+                f"只允许 {sorted(allowed_values)}"
+            )
 
 
 def validate_file(filepath: str):
@@ -187,6 +211,44 @@ def validate_file(filepath: str):
                 errors.append(
                     f"{prefix} ({cid}): aliases 中使用了未定义的 slot: {extra}"
                 )
+
+        # 4.6 vocab_hints 可选校验
+        if "vocab_hints" in cmd:
+            vocab_hints = cmd["vocab_hints"]
+            if not isinstance(vocab_hints, dict):
+                errors.append(f"{prefix}.vocab_hints: 必须是对象")
+            else:
+                for key in vocab_hints.keys():
+                    if key not in {"target_kinds", "use_kinds", "pairing_notes"}:
+                        errors.append(
+                            f"{prefix}.vocab_hints: 不支持字段 '{key}'，"
+                            "只允许 target_kinds/use_kinds/pairing_notes"
+                        )
+
+                if "target_kinds" in vocab_hints:
+                    _validate_hint_string_list(
+                        prefix,
+                        "vocab_hints.target_kinds",
+                        vocab_hints["target_kinds"],
+                        ALLOWED_TARGET_KINDS,
+                        errors,
+                    )
+                if "use_kinds" in vocab_hints:
+                    _validate_hint_string_list(
+                        prefix,
+                        "vocab_hints.use_kinds",
+                        vocab_hints["use_kinds"],
+                        ALLOWED_USE_KINDS,
+                        errors,
+                    )
+                if "pairing_notes" in vocab_hints:
+                    _validate_hint_string_list(
+                        prefix,
+                        "vocab_hints.pairing_notes",
+                        vocab_hints["pairing_notes"],
+                        None,
+                        errors,
+                    )
 
     # ── 5. 全局去重检查（command_id 已在上面做过） ──
 

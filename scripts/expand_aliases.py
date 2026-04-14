@@ -9,6 +9,7 @@ import json
 import os
 import sys
 
+from game_context import build_command_semantic_profile, load_game_background
 from llm_client import call_llm_json
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +34,7 @@ def load_commands(game: str) -> list[dict]:
 def expand_aliases_for_command(
     cmd: dict,
     template: str,
+    game_background: str,
     model: str | None = None,
     think_mode: bool = False,
     think_level: str = "high",
@@ -50,6 +52,14 @@ def expand_aliases_for_command(
     )
     prompt = prompt.replace(
         "{{aliases}}", json.dumps(cmd["aliases"], ensure_ascii=False)
+    )
+    prompt = prompt.replace(
+        "{{game_background}}",
+        game_background or "未提供独立背景文件，请根据 command 文本推断玩家表达风格。",
+    )
+    prompt = prompt.replace(
+        "{{command_semantic_profile_json}}",
+        json.dumps(build_command_semantic_profile(cmd), ensure_ascii=False, indent=2),
     )
 
     result = call_llm_json(
@@ -94,6 +104,7 @@ def expand_aliases(
 
     commands = load_commands(game)
     template = load_prompt_template()
+    game_background = load_game_background(game)
 
     # 过滤
     if command_id:
@@ -109,6 +120,7 @@ def expand_aliases(
         new_aliases = expand_aliases_for_command(
             cmd,
             template,
+            game_background,
             model=model,
             think_mode=think_mode,
             think_level=think_level,

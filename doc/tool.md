@@ -45,6 +45,7 @@ python scripts/validate_commands.py
 | aliases | 占位符 `{use}` / `{target}` 只使用合法 slot name | ❌ 错误 |
 | aliases | 占位符与 slots 定义一致（不能使用未定义的 slot） | ❌ 错误 |
 | aliases | 有参数 command 的 aliases 中应使用对应占位符 | ⚠️ 警告 |
+| vocab_hints | 如果提供，必须是对象，且只允许 `target_kinds` / `use_kinds` / `pairing_notes` | ❌ 错误 |
 
 ### 输出内容
 
@@ -129,6 +130,12 @@ Step 5: 正样本自由改写 → paraphrase 样本
 Step 6: 合并输出
 Step 7: 末尾多轮抽样 → 质量抽查
 ```
+
+### 背景配置
+
+- 每个游戏可在 `commands/{game}.background.txt` 中提供独立背景描述。
+- 词库生成、别名扩写、全局负样本、质量抽查会统一读取该背景文件。
+- 如果背景文件不存在，脚本会兼容回退到历史产物或默认背景。
 
 ### 使用方式
 
@@ -261,6 +268,31 @@ mods:glm-5,kimi-k2.5,mimo-v2-pro,deepseek-v3.2
 | `paraphrase_prompt.txt` | 自由改写 |
 | `quality_audit_prompt.txt` | 末尾质量抽查 |
 | `full_check_issue_review_prompt.txt` | 全部数据检查问题样本逐条复核 |
+
+### 词库与命令语义
+
+- `vocab_prompt.txt` 不再绑定固定 MMORPG 类目，而是根据游戏背景、当前 command 文本和语义画像生成词库。
+- `targets` 可以覆盖角色、单位、建筑物、地标、设施、交互装置、掉落物、尸体、材料、任务物品、区域短语等，但必须服从当前 command 的语义。
+- `uses` 可以覆盖技能、武器、武器模式、消耗品、工具、任务道具等，但只生成当前 command 真正会“使用”的对象。
+- 对于仅 `target` 或仅 `use` 的 command，`vocab.json` 中无关数组允许为空。
+
+### 可选字段：vocab_hints
+
+在 `commands/*.json` 的单条 command 中可以添加可选字段 `vocab_hints`，用于增强自动语义推断：
+
+```json
+{
+  "vocab_hints": {
+    "target_kinds": ["building", "interactive_object"],
+    "use_kinds": ["tool", "quest_item"],
+    "pairing_notes": ["优先生成与终端、门禁、控制台相关的工具组合"]
+  }
+}
+```
+
+- `target_kinds` 可选值：`ally`、`enemy`、`player`、`building`、`landmark`、`facility`、`interactive_object`、`loot`、`corpse`、`area`
+- `use_kinds` 可选值：`attack_skill`、`heal_skill`、`buff_skill`、`control_skill`、`consumable`、`tool`、`weapon`、`weapon_mode`、`quest_item`
+- `pairing_notes` 为自由文本提示，主要用于约束 `target_use_pairs`
 
 ### 全部数据检查与问题样本复核
 
